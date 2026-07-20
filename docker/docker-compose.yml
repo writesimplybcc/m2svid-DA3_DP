@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  stereofaster:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: stereofaster:latest
+    container_name: stereofaster
+
+    # GPU support (requires NVIDIA Container Toolkit)
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    ports:
+      - "7860:7860"
+
+    volumes:
+      # Mount your local data and outputs
+      - ../data:/app/data
+      - ../outputs:/app/outputs
+
+      # Mount M2SVid weights (very important - ~4-8GB)
+      - ../m2svid/ckpts:/app/m2svid/ckpts
+
+      # Mount Hugging Face cache so DA3 models are not re-downloaded every time
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+
+      # Optional: mount custom videos folder
+      # - /path/to/your/videos:/app/videos:ro
+
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - HF_HUB_ENABLE_HF_TRANSFER=1
+      # Uncomment if you want to force a specific CUDA device
+      # - CUDA_VISIBLE_DEVICES=0
+
+      # PYTHONPATH is also set in the Dockerfile, but we can override here
+      - PYTHONPATH=/app:/app/Depth-Anything-3/src:/app/m2svid/third_party/Hi3D-Official:/app/m2svid/third_party/pytorch-msssim
+
+    # Increase shared memory for large models (recommended)
+    shm_size: '16gb'
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Command can be overridden
+    # Example: run only the DA3 backend instead of webui
+    # command: python -m depth_anything_3.cli backend --model-dir depth-anything/DA3NESTED-GIANT-LARGE-1.1 --host 0.0.0.0 --port 8008

@@ -1,0 +1,99 @@
+# StereoFaster - Requirements
+#
+# This file is intended for:
+# - Local development (pip install -r requirements.txt)
+# - Git tracking of dependencies
+# - Docker / CI base layer
+#
+# Notes:
+# - PyTorch + CUDA **must** be installed first (before this file).
+# - Recommended versions (as of 2026):
+#     • PyTorch 2.3.1 + CUDA 12.1   → Best balance for both DA3 and M2SVid/sgm
+#     • PyTorch 2.4.x + CUDA 12.1   → Also works well (newer)
+#     • CUDA 11.8 users: Use PyTorch 2.0.1 + cu118 (matches original M2SVid env)
+#
+# Install PyTorch first with (CUDA 12.1 example):
+#   pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/cu121
+#
+# Then run:
+#   pip install -r requirements.txt
+#
+# xformers is highly recommended by DA3 but can be skipped on some platforms.
+# This covers the modern 2-step DA3 + M2SVid pipeline + the Gradio WebUI.
+
+# =============================================================================
+# Core Deep Learning
+# =============================================================================
+torch>=2.0.0
+torchvision>=0.15.0
+# xformers>=0.0.22          # Strongly recommended for DA3 speed/quality
+
+# =============================================================================
+# DA3 (Depth Anything 3) Core Dependencies
+# =============================================================================
+addict
+huggingface_hub
+safetensors
+omegaconf
+numpy
+opencv-python
+pillow
+tqdm
+einops
+pytorch-lightning
+
+# =============================================================================
+# M2SVid / Hi3D-Official (SGM) Dependencies
+# These are the minimal packages pulled in by the parts of M2SVid we use
+# (warping, prepare_da3_depth, inpaint_and_refine, model loading)
+ffmpeg-python
+imageio
+kornia                      # Required by sgm (from Hi3D-Official third_party)
+accelerate                  # Commonly needed for model loading in sgm/Hi3D
+torchmetrics
+transformers                # Often pulled by conditioning modules in Hi3D/sgm
+open-clip-torch==2.29.0     # Required by sgm (Hi3D-Official) for text conditioning in M2SVid
+pytorch-msssim>=0.2.1       # Used in m2svid_model.py for MS-SSIM metric during generation
+av                          # Required by torchvision.io.write_video for video exports
+# decord                    # Optional but useful for faster video decoding
+
+
+# =============================================================================
+# WebUI (Gradio)
+# =============================================================================
+gradio>=4.0
+python-dotenv>=1.0  # for loading .env with HF_TOKEN etc. (optional but recommended)
+
+# =============================================================================
+# Common Utilities used across the project
+# =============================================================================
+requests
+typer
+fastapi
+uvicorn
+moviepy
+pyyaml
+
+# =============================================================================
+# Optional but recommended for full functionality
+# =============================================================================
+# For DA3 streaming / long video support
+# faiss-cpu                 # or faiss-gpu if you have it
+# numba
+# pandas
+
+# =============================================================================
+# Docker Example (recommended pattern)
+# =============================================================================
+# FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
+#
+# RUN pip install --upgrade pip
+# RUN pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 \
+#     --index-url https://download.pytorch.org/whl/cu121
+# RUN pip install -r requirements.txt
+#
+# Then install DA3 in editable mode inside the container:
+#   cd Depth-Anything-3 && pip install -e ".[app]"
+#
+# And make sure third-party paths are in PYTHONPATH for M2SVid:
+#   PYTHONPATH=".:Depth-Anything-3/src:m2svid/third_party/Hi3D-Official:..."

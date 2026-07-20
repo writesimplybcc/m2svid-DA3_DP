@@ -1,0 +1,48 @@
+# Dockerfile.vastbase - BASE IMAGE for VAST.AI optimized StereoFaster WEBUI
+# Build once, use many times
+# This includes all slow-to-build dependencies
+
+FROM vastai/base-image:cuda-12.8.1-cudnn-devel-ubuntu22.04
+
+# Set working directory
+WORKDIR /workspace
+ 
+# Install required system packages (Vast base already provides most CUDA/Python tools)
+# FFmpeg and libgl1-mesa-glx are required for video processing and OpenCV
+RUN apt-get update && \
+    apt-get install -y python3-tk git git-lfs curl ffmpeg libgl1-mesa-glx && \
+    git lfs install && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Set PATH to include Miniforge bin directory first
+ENV PATH="/opt/miniforge3/bin:${PATH}"
+
+# For StereoFaster, we assume the code will be cloned or copied in the final UI image.
+# But for the base image, we only need the requirements to cache the heavy pip installs.
+RUN git clone https://github.com/writesimplybcc/m2svid-DA3_DP.git && cd m2svid-DA3_DP
+WORKDIR /workspace/m2svid-DA3_DP
+COPY requirements.txt .
+
+# Install Python dependencies (this is the slow part)
+# Use the pip from the Vast base's Miniforge installation via PATH
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir --upgrade huggingface_hub[cli]
+
+# Git credential helper (needed for HF private/gated model downloads)
+RUN git config --global credential.helper store
+
+# Download and place heavy model weights
+COPY download_weights.sh .
+RUN chmod +x download_weights.sh && ./download_weights.sh
+
+# PyTorch memory optimization
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False
+
+# Ensure root for the entire build and runtime (matches current behavior)
+USER root
+# Override the base image's entrypoint to allow normal container execution
+ENTRYPOINT []
+
+# Expose Gradio (7878) and FileBrowser (8080)
+EXPOSE 7878 8080

@@ -1,2 +1,31 @@
+# Virtual Environments
+venv/
+.env
+
+# Media Folders (Local and Docker Generated)
+source_videos/
+depthmaps_videos/
+final_videos/
+scratch/
+output_inpainted/
+output_depthmaps/
+output_splatted/
+input_source_clips/
+
+# Model Weights
+ckpts/
+checkpoints/
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+
+# Media in Root
+*.mp4
+*.npz
+
+# System/Cache
 __pycache__/
-.vscode
+*.pyc
+.DS_Store

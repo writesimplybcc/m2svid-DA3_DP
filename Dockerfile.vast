@@ -1,0 +1,49 @@
+# Dockerfile for StereoFaster WEBUI (Vast.AI)
+# This creates a lightweight image that loads weights fast on each container start
+FROM writesimplybcc/stereofaster:vastbase
+
+# Set PATH to include Miniforge bin directory first so python is available
+ENV PATH="/opt/miniforge3/bin:${PATH}"
+
+# ============================================================
+# Set working directory
+# ============================================================
+WORKDIR /workspace/m2svid-DA3_DP
+
+# Copy ALL your code (this replaces/adds to the base files)
+# Core files
+COPY webui.py .
+COPY run_webui.ps1 .
+COPY requirements.txt .
+
+# Startup scripts
+COPY start-with-filebrowser.sh .
+COPY entrypoint.sh .
+
+# Your WEBUI dependency folders
+COPY Depth-Anything-3/ ./Depth-Anything-3/
+COPY m2svid/ ./m2svid/
+COPY hi3D/ ./hi3D/
+
+# Create necessary I/O folders
+RUN mkdir -p source_videos depthmaps_videos final_videos scratch ckpts checkpoints
+
+# Install FileBrowser
+RUN curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | bash
+
+# Copy startup script and fix line endings (robust CRLF -> LF conversion)
+RUN tr -d '\r' < /workspace/m2svid-DA3_DP/start-with-filebrowser.sh > /workspace/m2svid-DA3_DP/start-with-filebrowser.sh.lf && \
+    mv /workspace/m2svid-DA3_DP/start-with-filebrowser.sh.lf /workspace/m2svid-DA3_DP/start-with-filebrowser.sh && \
+    chmod +x /workspace/m2svid-DA3_DP/start-with-filebrowser.sh
+
+# Copy entrypoint script and fix line endings
+RUN tr -d '\r' < /workspace/m2svid-DA3_DP/entrypoint.sh > /workspace/m2svid-DA3_DP/entrypoint.sh.lf && \
+    mv /workspace/m2svid-DA3_DP/entrypoint.sh.lf /workspace/m2svid-DA3_DP/entrypoint.sh && \
+    chmod +x /workspace/m2svid-DA3_DP/entrypoint.sh
+
+# Expose ports: Gradio (7878) and FileBrowser (8080)
+EXPOSE 7878 8080
+
+# Use entrypoint to inject RSA key (if needed), then run the startup script
+ENTRYPOINT ["/workspace/m2svid-DA3_DP/entrypoint.sh"]
+CMD ["/workspace/m2svid-DA3_DP/start-with-filebrowser.sh"]
