@@ -1015,7 +1015,7 @@ def create_stereofaster_ui():
         if d_mp4.exists():
             default_depth_mp4 = str(d_mp4)
 
-    with gr.Blocks(title="StereoFaster Hub") as demo:
+    with gr.Blocks(title="StereoFaster Hub", css=".gradio-container { max-width: 1600px !important; }") as demo:
         gr.HTML(
             """
             <div style='text-align: center; padding: 20px; background: linear-gradient(135deg, #101827, #0B2545); border-radius: 12px; margin-bottom: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.05);'>

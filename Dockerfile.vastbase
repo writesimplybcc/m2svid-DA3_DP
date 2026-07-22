@@ -34,7 +34,9 @@ RUN git config --global credential.helper store
 
 # Download and place heavy model weights
 COPY download_weights.sh .
-RUN chmod +x download_weights.sh && ./download_weights.sh
+RUN sed -i -e 's/\r$//' download_weights.sh && \
+    chmod +x download_weights.sh && \
+    ./download_weights.sh
 
 # PyTorch memory optimization
 ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:False
