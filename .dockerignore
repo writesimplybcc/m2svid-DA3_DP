@@ -1,0 +1,31 @@
+# Virtual Environments
+venv/
+.env
+
+# Media Folders (Local and Docker Generated)
+source_videos/
+depthmaps_videos/
+final_videos/
+scratch/
+output_inpainted/
+output_depthmaps/
+output_splatted/
+input_source_clips/
+*.mp4
+*.npz
+
+# Model Weights (Do not copy giant weights into the UI image context)
+ckpts/
+checkpoints/
+m2svid/ckpts/
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+
+# System/Cache
+__pycache__/
+*.pyc
+.DS_Store
+.git/
