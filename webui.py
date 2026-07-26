@@ -1073,16 +1073,25 @@ def step2_run_m2svid(
 
         try:
             anaglyph_tensor = make_anaglyph_video(padded_input, padded_final, unnormalized_videos=True)
-            _save_video(anaglyph_tensor[None], fps, str(anaglyph))
         except Exception as e:
-            SF_LOG.error(f"Anaglyph post-processing failed (non-fatal): {e}")
+            SF_LOG.error(f"Anaglyph generation failed (non-fatal): {e}")
             anaglyph_tensor = None
+
+        if anaglyph_tensor is not None:
+            try:
+                _save_video(anaglyph_tensor[None], fps, str(anaglyph))
+            except Exception as e:
+                SF_LOG.error(f"Anaglyph save failed: {e}")
+                anaglyph = None
+        else:
+            anaglyph = None
 
         progress(1.0, desc="M2SVid stage complete!")
         clear_cuda()
 
         status = "✅ M2SVid conversion finished. Download the results below."
-        return status, str(generated_right), str(sbs), str(anaglyph), str(out_dir)
+        return status, str(generated_right) if os.path.exists(generated_right) else None, str(sbs) if os.path.exists(sbs) else None, str(anaglyph) if anaglyph and os.path.exists(anaglyph) else None, f"Saved to {out_dir.name}"
+
 
     except Exception as e:
         clear_cuda()
