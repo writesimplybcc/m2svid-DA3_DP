@@ -898,7 +898,11 @@ def step2_run_m2svid(
         return "Original video not provided. Please select or upload a source video in Step 1 or File Hub.", "", "", "", ""
 
     video_path = input_video_path
-    out_dir = Path(tempfile.mkdtemp(prefix="stereofaster_m2s_"))
+    stem = Path(video_path).stem
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    out_dir = FINAL_DIR / f"{stem}_stereo_{timestamp}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    
     reprojected_dir = out_dir / "reprojected"
     reprojected_dir.mkdir(parents=True, exist_ok=True)
 
