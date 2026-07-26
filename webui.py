@@ -954,14 +954,6 @@ def step2_run_m2svid(
         reprojected = reprojected.permute(1, 0, 2, 3).float() * 2 - 1
         reprojected_mask_t = reprojected_mask_arr.permute(1, 0, 2, 3).float() * 2 - 1
 
-        c, t, h, w = reprojected_mask_t.shape
-        downsampled_resolution = [int(h / 8), int(w / 8)]
-        reprojected_mask_t = reprojected_mask_t.permute(1, 0, 2, 3)
-        reprojected_mask_t = torch.nn.functional.interpolate(
-            reprojected_mask_t.float(), size=downsampled_resolution, mode="bilinear", antialias=bool(mask_antialias)
-        )[:, [0]]
-        reprojected_mask_t = reprojected_mask_t.permute(1, 0, 2, 3)
-
         orig_shape = input_video.shape[-2:]
         if m2svid_process_res != "Native":
             res_str = m2svid_process_res.split(" ")[0]
@@ -971,6 +963,14 @@ def step2_run_m2svid(
                 input_video = torch.nn.functional.interpolate(input_video, size=(th, tw), mode="bilinear", align_corners=False)
                 reprojected = torch.nn.functional.interpolate(reprojected, size=(th, tw), mode="bilinear", align_corners=False)
                 reprojected_mask_t = torch.nn.functional.interpolate(reprojected_mask_t, size=(th, tw), mode="bilinear", align_corners=False)
+
+        c, t, h, w = reprojected_mask_t.shape
+        downsampled_resolution = [int(h / 8), int(w / 8)]
+        reprojected_mask_t = reprojected_mask_t.permute(1, 0, 2, 3)
+        reprojected_mask_t = torch.nn.functional.interpolate(
+            reprojected_mask_t.float(), size=downsampled_resolution, mode="bilinear", antialias=bool(mask_antialias)
+        )[:, [0]]
+        reprojected_mask_t = reprojected_mask_t.permute(1, 0, 2, 3)
 
         # prepare for generation
         num_samples = gen_chunk_size
