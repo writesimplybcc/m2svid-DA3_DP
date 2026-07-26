@@ -27,7 +27,7 @@ print("⏳ Please wait while heavy ML libraries (PyTorch, Gradio) are loaded int
 print("   This may take up to a minute depending on your disk speed.")
 print("===============================================================")
 
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:False")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import logging
 import os
@@ -53,7 +53,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "Depth-Anything-3" / "src"))
 sys.path.insert(0, str(PROJECT_ROOT / "m2svid" / "third_party" / "Hi3D-Official"))
 sys.path.insert(0, str(PROJECT_ROOT / "m2svid" / "third_party" / "pytorch-msssim"))
 
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:False")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 # ---- Logging setup ----
 log_level = logging.DEBUG if os.getenv("STEREOFASTER_DEBUG") == "1" else logging.INFO
@@ -486,15 +486,15 @@ def _is_fast_gpu(gpu_name: str) -> bool:
 def get_vram_defaults():
     """Returns dynamic batch sizes based on VRAM capacity."""
     if not torch.cuda.is_available():
-        return {"da3": 2, "warp": 1, "vae": 2}
+        return {"da3": 2, "warp": 1, "vae": 2, "gen_chunk": 2}
     vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-    if vram_gb >= 80: return {"da3": 32, "warp": 16, "vae": 35}
-    if vram_gb >= 40: return {"da3": 16, "warp": 8, "vae": 24}
-    if vram_gb >= 30: return {"da3": 12, "warp": 6, "vae": 20}
-    if vram_gb >= 22: return {"da3": 8, "warp": 4, "vae": 16}
-    if vram_gb >= 18: return {"da3": 6, "warp": 4, "vae": 12}
-    if vram_gb >= 12: return {"da3": 4, "warp": 2, "vae": 4}
-    return {"da3": 2, "warp": 1, "vae": 2}
+    if vram_gb >= 80: return {"da3": 32, "warp": 16, "vae": 35, "gen_chunk": 35}
+    if vram_gb >= 40: return {"da3": 16, "warp": 8, "vae": 24, "gen_chunk": 28}
+    if vram_gb >= 30: return {"da3": 12, "warp": 6, "vae": 20, "gen_chunk": 21}
+    if vram_gb >= 22: return {"da3": 8, "warp": 4, "vae": 16, "gen_chunk": 14}
+    if vram_gb >= 18: return {"da3": 6, "warp": 4, "vae": 12, "gen_chunk": 10}
+    if vram_gb >= 12: return {"da3": 4, "warp": 2, "vae": 4, "gen_chunk": 5}
+    return {"da3": 2, "warp": 1, "vae": 2, "gen_chunk": 3}
 
 _VRAM_DEFAULTS = get_vram_defaults()
 _FAST_GPU = False
@@ -1313,7 +1313,7 @@ def create_stereofaster_ui():
                         
                         batch_m2svid_btn = gr.Button("📦 Run Batch Stereography on All Matched Pairs", variant="secondary")
                         warping_batch_size = gr.Slider(1, 16, value=_VRAM_DEFAULTS["warp"], step=1, label="Warping Batch Size (lower = less VRAM)")
-                        gen_chunk_size = gr.Slider(2, 35, value=14, step=1, label="Generation Chunk Size (lower = less VRAM)")
+                        gen_chunk_size = gr.Slider(2, 35, value=_VRAM_DEFAULTS["gen_chunk"], step=1, label="Generation Chunk Size (lower = less VRAM)")
 
                     with gr.Column(scale=1):
                         step2_btn = gr.Button("🎬 Convert Selected to Stereo", variant="primary", size="lg")
