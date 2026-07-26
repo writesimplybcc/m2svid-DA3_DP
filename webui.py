@@ -180,6 +180,23 @@ def execute_crop(video_path: str, preset: str, progress=gr.Progress(track_tqdm=T
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return out_path
 
+def batch_auto_crop_all(progress=gr.Progress(track_tqdm=True)):
+    vids = [p for p in SOURCE_DIR.iterdir() if p.is_file() and p.suffix.lower() in ('.mp4', '.mov', '.avi', '.mkv')]
+    vids = [v for v in vids if not v.stem.endswith("_cropped")]
+    if not vids:
+        return gr.update(), gr.update()
+        
+    for i, vp in enumerate(vids):
+        progress(float(i)/len(vids), desc=f"Auto-Cropping {vp.name}")
+        preset, _, _ = analyze_letterbox(str(vp))
+        if preset != "16:9 (None)":
+            execute_crop(str(vp), preset, progress=None)
+            
+    progress(1.0, desc="Batch Crop Complete!")
+    src = get_source_video_list()
+    return gr.update(choices=[""] + src), gr.update(choices=[""] + src)
+
+
 
 
 def convert_depth_video_to_npz(video_path: str, out_npz_path: str):
@@ -1261,7 +1278,7 @@ def create_stereofaster_ui():
                         batch_size = gr.Slider(1, 32, value=_VRAM_DEFAULTS["da3"], step=1, label="DA3 Batch Size")
                         
                         batch_depth_btn = gr.Button("📦 Run Batch Depth Processing on All Source Videos", variant="secondary")
-                        
+                        batch_crop_btn = gr.Button("✂️ Batch Auto-Crop All Widescreen/IMAX Videos", variant="secondary")
                     with gr.Column(scale=1):
                         step1_dropdown = gr.Dropdown(
                             choices=get_source_video_list(),
@@ -1391,6 +1408,12 @@ def create_stereofaster_ui():
             fn=lambda x: x,
             inputs=[depth_state],
             outputs=[depth_input],
+        )
+
+        batch_crop_btn.click(
+            fn=batch_auto_crop_all,
+            inputs=[],
+            outputs=[source_dropdown, step1_dropdown],
         )
 
         # Wire step 2
