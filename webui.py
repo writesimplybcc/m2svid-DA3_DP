@@ -1060,6 +1060,10 @@ def step2_run_m2svid(
         final_generated = torch.nn.functional.interpolate(
             final_generated, size=orig_shape, mode="bilinear", align_corners=False
         )
+        if input_video.shape[-2:] != orig_shape:
+            input_video = torch.nn.functional.interpolate(
+                input_video, size=orig_shape, mode="bilinear", align_corners=False
+            )
         
         # Ensure outputs are padded back to 16:9 standard resolution for hardware compatibility
         c, t, h, w = final_generated.shape
