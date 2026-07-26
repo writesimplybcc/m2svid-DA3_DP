@@ -9,11 +9,15 @@ WORKDIR /workspace
  
 # Install required system packages (Vast base already provides most CUDA/Python tools)
 # FFmpeg and libgl1-mesa-glx are required for video processing and OpenCV
-RUN apt-get update && \
-    apt-get install -y python3-tk git git-lfs curl ffmpeg libgl1-mesa-glx && \
-    git lfs install && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y \
+    wget \
+    curl \
+    git \
+    git-lfs \
+    libgl1 \
+    libglib2.0-0 \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 # Set PATH to include Miniforge bin directory first
 ENV PATH="/opt/miniforge3/bin:${PATH}"

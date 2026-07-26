@@ -18,6 +18,15 @@ Requirements:
 """
 
 import os
+import sys
+
+# Provide immediate feedback to the console before heavy imports lock up the thread
+print("===============================================================")
+print("🚀 Starting StereoFaster WebUI Initialization...")
+print("⏳ Please wait while heavy ML libraries (PyTorch, Gradio) are loaded into memory.")
+print("   This may take up to a minute depending on your disk speed.")
+print("===============================================================")
+
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:False")
 
 import logging
@@ -115,6 +124,10 @@ def run_depth_pro_depth(
                 progress((i + 1) / total_frames, desc=f"DepthPro processing frame {i+1}/{total_frames}")
             except Exception:
                 pass
+                
+        # Console logging every 10 frames or the last frame
+        if (i + 1) % 10 == 0 or i == total_frames - 1:
+            SF_LOG.info(f"DepthPro processing frame {i+1}/{total_frames}...")
         
     depth = np.stack(depths, axis=0)
     return depth
@@ -182,7 +195,7 @@ def run_depth_on_source_videos(progress=None, model_name=None, process_res=720, 
     SF_LOG.info("Batch depth processing complete")
 
 
-def run_m2svid_on_pairs(m2svid_config=None, m2svid_ckpt=None, disparity_perc=0.05, closing_kernel=11, mask_antialias=False, warping_batch_size=2, progress=None):
+def run_m2svid_on_pairs(m2svid_config, m2svid_ckpt, disparity_perc, closing_kernel, mask_antialias, warping_batch_size, gen_chunk_size, progress=gr.Progress(track_tqdm=True)):
     """Process pairs in SOURCE_DIR and DEPTH_DIR and save outputs into FINAL_DIR."""
     SF_LOG.info("Starting batch M2SVid processing on source_videos + depthmaps_videos")
     cfg = m2svid_config or DEFAULT_M2SVID_CONFIG
@@ -220,7 +233,7 @@ def run_m2svid_on_pairs(m2svid_config=None, m2svid_ckpt=None, disparity_perc=0.0
         try:
             prev_input = STATE.get("input_video")
             STATE["input_video"] = str(vp)
-            status, gen_right, sbs, anaglyph, out_dir = step2_run_m2svid(str(depth_npz), disparity_perc, closing_kernel, mask_antialias, cfg, ckpt, input_video_path=str(vp), warping_batch_size=warping_batch_size, progress=progress)
+            status, gen_right, sbs, anaglyph, out_dir = step2_run_m2svid(str(depth_npz), disparity_perc, closing_kernel, mask_antialias, cfg, ckpt, input_video_path=str(vp), warping_batch_size=warping_batch_size, gen_chunk_size=gen_chunk_size, progress=progress)
             if out_dir and os.path.exists(out_dir):
                 try:
                     src = Path(out_dir) / "generated_right.mp4"
@@ -496,8 +509,16 @@ def step1_run_da3_depth(
     Produces both a depth.npz (for M2SVid warping) and a visual depth.mp4 video.
     Returns: (status, depth_preview_video, depth_npz_path, depth_state_for_step2)
     """
-    if input_video is None:
-        return "Please upload a video first.", None, None, None
+    if input_video is None or input_video == "":
+        return "Please upload or select a video first.", None, None, None
+        
+    # If the input is just a stem (from dropdown), convert it to an absolute path
+    if isinstance(input_video, str) and not os.path.isabs(input_video) and not input_video.startswith("/workspace") and not ":" in input_video:
+        possible = list(SOURCE_DIR.glob(f"{input_video}.*"))
+        if possible:
+            input_video = str(possible[0])
+        else:
+            return f"Video {input_video} not found in source_videos.", None, None, None
     
     is_depth_pro = "DepthPro" in model_name or "depth-pro" in model_name
     model_type_str = "Depth Pro" if is_depth_pro else "DA3"
@@ -604,10 +625,10 @@ def _create_depth_preview_video(depth: np.ndarray, out_path: str, fps: float):
     SF_LOG.info(f"Creating depth preview video: {n} frames @ {w}x{h}, {fps} fps -> {out_path}")
 
     fourcc_candidates = [
-        cv2.VideoWriter_fourcc(*"mp4v"),
-        cv2.VideoWriter_fourcc(*"avc1"),
+        cv2.VideoWriter_fourcc(*"avc1"), # H.264 (Most browser compatible)
         cv2.VideoWriter_fourcc(*"X264"),
         cv2.VideoWriter_fourcc(*"H264"),
+        cv2.VideoWriter_fourcc(*"mp4v"), # Fallback (Will trigger Gradio warning)
     ]
 
     writer = None
@@ -722,6 +743,7 @@ def step2_run_m2svid(
     m2svid_ckpt: str,
     input_video_path: Optional[str] = None,
     warping_batch_size: int = 2,
+    gen_chunk_size: int = 14,
     progress=gr.Progress(track_tqdm=True)
 ) -> Tuple[str, str, str, str, str]:
     """
@@ -806,7 +828,7 @@ def step2_run_m2svid(
         reprojected_mask_t = reprojected_mask_t.permute(1, 0, 2, 3)
 
         # prepare for generation
-        num_samples = getattr(model, 'num_samples', None) or 25
+        num_samples = gen_chunk_size
         T = input_video.shape[1]
         SF_LOG.info(f"Video length {T} frames; model.max_frames={num_samples}")
 
@@ -917,9 +939,7 @@ def step2_run_m2svid(
 
     except Exception as e:
         clear_cuda()
-        import traceback
-        traceback.print_exc()
-        return f"❌ Error in M2SVid step: {str(e)}", "", "", "", ""
+        return f"❌ Error in M2SVid step: {str(e)}", None, None, None, None
 
 
 # =============================================================================
@@ -1015,9 +1035,14 @@ def create_stereofaster_ui():
         if d_mp4.exists():
             default_depth_mp4 = str(d_mp4)
 
-    with gr.Blocks(title="StereoFaster Hub", css=".gradio-container { max-width: 1600px !important; }") as demo:
+    with gr.Blocks(title="StereoFaster Hub", fill_width=True) as demo:
         gr.HTML(
             """
+            <style>
+                .gradio-container { max-width: 100% !important; padding: 0 !important; }
+                .contain { max-width: 100% !important; padding: 0 !important; }
+                #component-0 { max-width: 100% !important; padding: 0 !important; }
+            </style>
             <div style='text-align: center; padding: 20px; background: linear-gradient(135deg, #101827, #0B2545); border-radius: 12px; margin-bottom: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.05);'>
                 <h1 style='color: #00F5FF; font-family: "Outfit", sans-serif; font-size: 2.8em; margin: 0; text-shadow: 0 0 20px rgba(0,245,255,0.3); font-weight: 800;'>StereoFaster</h1>
                 <p style='color: #8D99AE; font-size: 1.1em; margin-top: 5px; font-weight: 300;'>Premium Multi-Model Depth & Stereoscopy Pipeline</p>
@@ -1038,41 +1063,39 @@ def create_stereofaster_ui():
                 
                 with gr.Row():
                     with gr.Column():
-                        source_dropdown = gr.Dropdown(
-                            choices=[""] + stems,
-                            value=default_stem,
-                            label="🎯 Select Prefix for Match & Preview",
-                            interactive=True,
-                        )
-                        
-                        depth_dropdown = gr.Dropdown(
-                            choices=get_depth_video_list(),
-                            value="",
-                            label="🗂️ Select Depth Video to Review",
-                            interactive=True,
-                            allow_custom_value=True,
-                        )
-                        
-                        gr.Markdown("##### 📤 Add new files directly to the folders:")
+                        gr.Markdown("##### 📤 Source Video Management")
                         source_uploader = gr.File(
                             label="Upload Source Video (saved to source_videos/)",
                             file_types=["video"],
                             type="filepath"
                         )
-                        depth_uploader = gr.File(
-                            label="Upload External Depth Video (saved to depthmaps_videos/)",
-                            file_types=["video"],
-                            type="filepath"
+                        source_dropdown = gr.Dropdown(
+                            choices=[""] + stems,
+                            value=default_stem,
+                            label="Select Prefix for Match & Preview",
+                            interactive=True,
                         )
-                        
-                    with gr.Column():
                         preview_video = gr.Video(
                             value=default_video,
                             label="Source Video Preview",
                             interactive=False,
                             format="mp4"
                         )
+                        
                     with gr.Column():
+                        gr.Markdown("##### 🗂️ Depth Map Management")
+                        depth_uploader = gr.File(
+                            label="Upload External Depth Video (saved to depthmaps_videos/)",
+                            file_types=["video"],
+                            type="filepath"
+                        )
+                        depth_dropdown = gr.Dropdown(
+                            choices=get_depth_video_list(),
+                            value="",
+                            label="Select Depth Video to Review",
+                            interactive=True,
+                            allow_custom_value=True,
+                        )
                         preview_depth = gr.Video(
                             value=default_depth_mp4,
                             label="Depth Map Preview",
@@ -1103,6 +1126,12 @@ def create_stereofaster_ui():
                         batch_depth_btn = gr.Button("📦 Run Batch Depth Processing on All Source Videos", variant="secondary")
                         
                     with gr.Column(scale=1):
+                        step1_dropdown = gr.Dropdown(
+                            choices=get_source_video_list(),
+                            value="",
+                            label="Select Source Video",
+                            interactive=True,
+                        )
                         step1_btn = gr.Button("⚡ Estimate Depth for Selected Video", variant="primary", size="lg")
                         step1_status = gr.Textbox(label="Estimation Progress", interactive=False)
                         depth_file = gr.File(label="Download Depth .npz", type="filepath")
@@ -1121,6 +1150,7 @@ def create_stereofaster_ui():
                         
                         batch_m2svid_btn = gr.Button("📦 Run Batch Stereography on All Matched Pairs", variant="secondary")
                         warping_batch_size = gr.Slider(1, 16, value=_VRAM_DEFAULTS["warp"], step=1, label="Warping Batch Size (lower = less VRAM)")
+                        gen_chunk_size = gr.Slider(2, 35, value=14, step=1, label="Generation Chunk Size (lower = less VRAM)")
 
                     with gr.Column(scale=1):
                         step2_btn = gr.Button("🎬 Convert Selected to Stereo", variant="primary", size="lg")
@@ -1144,6 +1174,13 @@ def create_stereofaster_ui():
             v_p, d_npz = select_source_video(stem)
             d_mp4 = DEPTH_DIR / f"{stem}_depth.mp4"
             d_mp4_p = str(d_mp4) if d_mp4.exists() else None
+            
+            SF_LOG.info(f"Loaded preview for '{stem}'")
+            if d_mp4_p:
+                SF_LOG.info(f"  -> Found Depth Video: {d_mp4_p}")
+            else:
+                SF_LOG.info(f"  -> No Depth Video found yet for '{stem}'")
+                
             return v_p, d_mp4_p, d_npz, d_npz
             
         source_dropdown.change(
@@ -1167,7 +1204,7 @@ def create_stereofaster_ui():
         # Wire step 1
         step1_btn.click(
             fn=step1_run_da3_depth,
-            inputs=[preview_video, da3_model, process_res, batch_size],
+            inputs=[step1_dropdown, da3_model, process_res, batch_size],
             outputs=[step1_status, preview_depth, depth_file, depth_state],
         )
 
@@ -1190,6 +1227,7 @@ def create_stereofaster_ui():
                 m2svid_ckpt,
                 preview_video,
                 warping_batch_size,
+                gen_chunk_size,
             ],
             outputs=[step2_status, out_right, out_sbs, out_anaglyph, out_dir_box],
         )
@@ -1202,23 +1240,24 @@ def create_stereofaster_ui():
         )
         batch_m2svid_btn.click(
             fn=run_m2svid_on_pairs,
-            inputs=[m2svid_config, m2svid_ckpt, disparity_perc, closing_kernel, mask_antialias, warping_batch_size],
+            inputs=[m2svid_config, m2svid_ckpt, disparity_perc, closing_kernel, mask_antialias, warping_batch_size, gen_chunk_size],
             outputs=None,
         )
 
         # Refresh button
         def _refresh_hub():
-            stems_new = get_source_video_list()
-            depth_stems_new = get_depth_video_list()
+            src = get_source_video_list()
+            dep = get_depth_video_list()
             return (
-                gr.update(choices=[""] + stems_new),
-                gr.update(choices=depth_stems_new),
+                gr.update(choices=[""] + src),
+                gr.update(choices=[""] + dep),
+                gr.update(choices=[""] + src)
             )
             
         refresh_btn.click(
             fn=_refresh_hub,
-            inputs=None,
-            outputs=[source_dropdown, depth_dropdown],
+            inputs=[],
+            outputs=[source_dropdown, depth_dropdown, step1_dropdown],
         )
         
         # Wire depth dropdown to update preview

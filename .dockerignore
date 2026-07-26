@@ -18,6 +18,13 @@ input_source_clips/
 ckpts/
 checkpoints/
 m2svid/ckpts/
+hi3D/Hi3D-Official-main/ckpts/
+m2svid/third_party/Hi3D-Official/ckpts/
+**/*.pt
+**/*.pth
+**/*.bin
+**/*.safetensors
+**/*.ckpt
 *.pt
 *.pth
 *.bin

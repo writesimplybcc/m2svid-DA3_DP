@@ -31,6 +31,8 @@ wget -q -O m2svid/ckpts/m2svid_weights.pt "https://storage.googleapis.com/gresea
 wget -q -O m2svid/ckpts/m2svid_no_full_atten_weights.pt "https://storage.googleapis.com/gresearch/m2svid/m2svid_no_full_atten_weights.pt"
 
 # 4. Other dependencies
+mkdir -p m2svid/third_party/Hi3D-Official/ckpts
+wget -q -O m2svid/third_party/Hi3D-Official/ckpts/open_clip_pytorch_model.bin "https://huggingface.co/hbyang/Hi3D/resolve/main/open_clip_pytorch_model.bin"
 # wget -q -O m2svid/ckpts/ViT-L-14.pt "YOUR_VIT_URL"
 # wget -q -O m2svid/ckpts/dpt_hybrid_384.pt "YOUR_DPT_URL"
 # wget -q -O m2svid/ckpts/metric_models/sac+logos+ava1-l14-linearMSE.pth "YOUR_METRIC_URL"

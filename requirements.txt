@@ -36,7 +36,7 @@ huggingface_hub
 safetensors
 omegaconf
 numpy
-opencv-python
+opencv-python<4.10.0
 pillow
 tqdm
 einops
@@ -46,6 +46,7 @@ pytorch-lightning
 # M2SVid / Hi3D-Official (SGM) Dependencies
 # These are the minimal packages pulled in by the parts of M2SVid we use
 # (warping, prepare_da3_depth, inpaint_and_refine, model loading)
+git+https://github.com/apple/ml-depth-pro.git
 ffmpeg-python
 imageio
 kornia                      # Required by sgm (from Hi3D-Official third_party)
@@ -71,7 +72,11 @@ requests
 typer
 fastapi
 uvicorn
-moviepy
+moviepy<2.0.0
+decorator<5.0.0
+numpy<2.0.0
+evo
+scipy<1.14.0
 pyyaml
 
 # =============================================================================

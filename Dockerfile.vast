@@ -15,6 +15,7 @@ WORKDIR /workspace/m2svid-DA3_DP
 COPY webui.py .
 COPY run_webui.ps1 .
 COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Startup scripts
 COPY start-with-filebrowser.sh .
@@ -41,8 +42,8 @@ RUN tr -d '\r' < /workspace/m2svid-DA3_DP/entrypoint.sh > /workspace/m2svid-DA3_
     mv /workspace/m2svid-DA3_DP/entrypoint.sh.lf /workspace/m2svid-DA3_DP/entrypoint.sh && \
     chmod +x /workspace/m2svid-DA3_DP/entrypoint.sh
 
-# Expose ports: Gradio (7878) and FileBrowser (8080)
-EXPOSE 7878 8080
+# Expose ports: Gradio (7878) and FileBrowser (7879)
+EXPOSE 7878 7879
 
 # Use entrypoint to inject RSA key (if needed), then run the startup script
 ENTRYPOINT ["/workspace/m2svid-DA3_DP/entrypoint.sh"]
