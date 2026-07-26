@@ -484,16 +484,23 @@ def _is_fast_gpu(gpu_name: str) -> bool:
 
 
 def get_vram_defaults():
-    """Returns dynamic batch sizes based on VRAM capacity."""
+    """Returns dynamic batch sizes based on VRAM capacity (targeting 12GB, 24GB, 32GB, 48GB, 96GB)."""
     if not torch.cuda.is_available():
         return {"da3": 2, "warp": 1, "vae": 2, "gen_chunk": 2}
     vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-    if vram_gb >= 80: return {"da3": 32, "warp": 16, "vae": 35, "gen_chunk": 35}
-    if vram_gb >= 40: return {"da3": 16, "warp": 8, "vae": 24, "gen_chunk": 28}
-    if vram_gb >= 30: return {"da3": 12, "warp": 6, "vae": 20, "gen_chunk": 21}
-    if vram_gb >= 22: return {"da3": 8, "warp": 4, "vae": 16, "gen_chunk": 14}
-    if vram_gb >= 18: return {"da3": 6, "warp": 4, "vae": 12, "gen_chunk": 10}
-    if vram_gb >= 12: return {"da3": 4, "warp": 2, "vae": 4, "gen_chunk": 5}
+    
+    if vram_gb >= 90: # 96GB class (e.g., A100 96GB/Mac 128GB)
+        return {"da3": 32, "warp": 16, "vae": 35, "gen_chunk": 35}
+    if vram_gb >= 45: # 48GB class (e.g., RTX 6000 Ada / A6000)
+        return {"da3": 16, "warp": 8, "vae": 28, "gen_chunk": 28}
+    if vram_gb >= 30: # 32GB class (e.g., V100 32GB)
+        return {"da3": 12, "warp": 6, "vae": 20, "gen_chunk": 21}
+    if vram_gb >= 22: # 24GB class (e.g., RTX 3090 / 4090)
+        return {"da3": 8, "warp": 4, "vae": 14, "gen_chunk": 14}
+    if vram_gb >= 11: # 12GB class (e.g., RTX 3060 / 4070)
+        return {"da3": 4, "warp": 2, "vae": 4, "gen_chunk": 5}
+        
+    # Fallback for <12GB (e.g., 8GB cards)
     return {"da3": 2, "warp": 1, "vae": 2, "gen_chunk": 3}
 
 _VRAM_DEFAULTS = get_vram_defaults()
