@@ -72,6 +72,116 @@ for _d in (SOURCE_DIR, DEPTH_DIR, FINAL_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 
+ASPECT_RATIO_PRESETS = {
+    "16:9 (None)": 1.7777,
+    "1.85:1 (Letterbox)": 1.85,
+    "2.00:1 (Letterbox)": 2.00,
+    "2.20:1 (Letterbox)": 2.20,
+    "2.35:1 (Letterbox)": 2.35,
+    "2.39:1 (Letterbox)": 2.39,
+    "2.76:1 (Letterbox)": 2.76,
+    "4:3 (Pillarbox)": 1.3333,
+    "1.37:1 (Pillarbox)": 1.37,
+    "1.43:1 (IMAX Pillarbox)": 1.43,
+    "1.66:1 (Pillarbox)": 1.66,
+    "1:1 (Square Pillarbox)": 1.00,
+    "9:16 (Vertical Pillarbox)": 0.5625
+}
+
+def analyze_letterbox(video_path: str) -> tuple[str, str, str]:
+    """Analyzes the first frame of a video to detect black bars, matching it to the closest preset."""
+    if not video_path or not os.path.exists(video_path):
+        return "16:9 (None)", "", ""
+    
+    cap = cv2.VideoCapture(video_path)
+    ret, frame = cap.read()
+    cap.release()
+    if not ret:
+        return "16:9 (None)", "", ""
+        
+    h, w = frame.shape[:2]
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 15, 255, cv2.THRESH_BINARY)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if not contours:
+        return "16:9 (None)", f"Full: {w}x{h}", video_path
+        
+    c = max(contours, key=cv2.contourArea)
+    x, y, bw, bh = cv2.boundingRect(c)
+    
+    if bw == 0 or bh == 0 or (bw >= w - 4 and bh >= h - 4):
+        return "16:9 (None)", f"Full: {w}x{h}", video_path
+        
+    detected_ratio = bw / bh
+    best_preset = "16:9 (None)"
+    min_diff = 999.0
+    for preset_name, ratio in ASPECT_RATIO_PRESETS.items():
+        diff = abs(detected_ratio - ratio)
+        if diff < min_diff:
+            min_diff = diff
+            best_preset = preset_name
+            
+    if best_preset == "16:9 (None)":
+        return best_preset, f"Full: {w}x{h}", video_path
+        
+    # Calculate crop
+    target_ratio = ASPECT_RATIO_PRESETS[best_preset]
+    if target_ratio > (w/h): # Letterbox
+        new_h = int(w / target_ratio)
+        new_h = new_h - (new_h % 8)
+        new_w = w
+    else: # Pillarbox
+        new_w = int(h * target_ratio)
+        new_w = new_w - (new_w % 8)
+        new_h = h
+        
+    res_str = f"{new_w}x{new_h}"
+    
+    # Generate 1-second preview
+    preview_path = str(PROJECT_ROOT / "scratch" / f"crop_preview_{Path(video_path).stem}.mp4")
+    crop_filter = f"crop={new_w}:{new_h}:(in_w-{new_w})/2:(in_h-{new_h})/2"
+    import subprocess
+    cmd = ["ffmpeg", "-y", "-i", video_path, "-t", "1", "-vf", crop_filter, "-c:v", "libx264", "-crf", "23", "-preset", "ultrafast", preview_path]
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    if os.path.exists(preview_path):
+        return best_preset, res_str, preview_path
+    return best_preset, res_str, video_path
+
+def execute_crop(video_path: str, preset: str, progress=gr.Progress(track_tqdm=True)) -> str:
+    if not video_path or not os.path.exists(video_path) or preset == "16:9 (None)":
+        return video_path
+        
+    import subprocess
+    target_ratio = ASPECT_RATIO_PRESETS.get(preset, 1.7777)
+    if target_ratio == 1.7777: return video_path
+    
+    cap = cv2.VideoCapture(video_path)
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
+    
+    if target_ratio > (w/h):
+        new_w = w
+        new_h = int(w / target_ratio)
+        new_h = new_h - (new_h % 8)
+    else:
+        new_h = h
+        new_w = int(h * target_ratio)
+        new_w = new_w - (new_w % 8)
+        
+    out_path = str(SOURCE_DIR / f"{Path(video_path).stem}_cropped.mp4")
+    crop_filter = f"crop={new_w}:{new_h}:(in_w-{new_w})/2:(in_h-{new_h})/2"
+    cmd = ["ffmpeg", "-y", "-i", video_path, "-vf", crop_filter, "-c:v", "libx264", "-crf", "17", "-preset", "fast", "-c:a", "copy", out_path]
+    
+    if progress:
+        progress(0, desc=f"Cropping video to {new_w}x{new_h}...")
+    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return out_path
+
+
+
 def convert_depth_video_to_npz(video_path: str, out_npz_path: str):
     """Extract frames from a grayscale depth video and save as compatible .npz file."""
     SF_LOG.info(f"Converting depth video {video_path} to M2SVid compatible .npz")
@@ -915,17 +1025,37 @@ def step2_run_m2svid(
         final_generated = torch.nn.functional.interpolate(
             final_generated, size=input_video.shape[-2:], mode="bilinear", align_corners=False
         )
-        SF_LOG.info(f"Output shape: {final_generated.shape}, saving videos...")
+        
+        # Ensure outputs are padded back to 16:9 standard resolution for hardware compatibility
+        c, t, h, w = final_generated.shape
+        target_h, target_w = h, w
+        if w < int(h * 16 / 9):  # Pillarbox, pad width
+            target_w = int(h * 16 / 9)
+            target_w = target_w - (target_w % 8)
+        elif h < int(w * 9 / 16):  # Letterbox, pad height
+            target_h = int(w * 9 / 16)
+            target_h = target_h - (target_h % 8)
+            
+        pad_top = (target_h - h) // 2
+        pad_bottom = target_h - h - pad_top
+        pad_left = (target_w - w) // 2
+        pad_right = target_w - w - pad_left
+        
+        padded_input = torch.nn.functional.pad(input_video, (pad_left, pad_right, pad_top, pad_bottom), value=-1.0)
+        padded_final = torch.nn.functional.pad(final_generated, (pad_left, pad_right, pad_top, pad_bottom), value=-1.0)
+        
+        SF_LOG.info(f"Padded output from {w}x{h} to 16:9 standard ({target_w}x{target_h})")
+
         generated_right = out_dir / "generated_right.mp4"
         sbs = out_dir / "stereo_sbs.mp4"
         anaglyph = out_dir / "anaglyph.mp4"
 
-        _save_video(final_generated[None], fps, str(generated_right))
-        sbs_tensor = torch.cat([input_video, final_generated], dim=-1)
+        _save_video(padded_final[None], fps, str(generated_right))
+        sbs_tensor = torch.cat([padded_input, padded_final], dim=-1)
         _save_video(sbs_tensor[None], fps, str(sbs))
 
         try:
-            anaglyph_tensor = make_anaglyph_video(input_video, final_generated, unnormalized_videos=True)
+            anaglyph_tensor = make_anaglyph_video(padded_input, padded_final, unnormalized_videos=True)
             _save_video(anaglyph_tensor[None], fps, str(anaglyph))
         except Exception as e:
             SF_LOG.error(f"Anaglyph post-processing failed (non-fatal): {e}")
@@ -1082,6 +1212,13 @@ def create_stereofaster_ui():
                             format="mp4"
                         )
                         
+                        with gr.Accordion("✂️ Auto-Crop Aspect Ratio", open=False):
+                            crop_preset = gr.Dropdown(choices=list(ASPECT_RATIO_PRESETS.keys()), value="16:9 (None)", label="Detected Preset", interactive=True)
+                            crop_res = gr.Textbox(value="", label="Remaining Resolution", interactive=False)
+                            toggle_preview_btn = gr.Button("🔄 Toggle View: Full vs Cropped Preview")
+                            apply_crop_btn = gr.Button("✂️ Apply Crop and Save as New Video", variant="primary")
+                            crop_preview_state = gr.State(None)
+                        
                     with gr.Column():
                         gr.Markdown("##### 🗂️ Depth Map Management")
                         depth_uploader = gr.File(
@@ -1170,7 +1307,8 @@ def create_stereofaster_ui():
         # Wire dropdown updates
         def _on_hub_select(stem):
             if not stem:
-                return None, None, None, None
+                return None, None, None, None, "16:9 (None)", "", None
+
             v_p, d_npz = select_source_video(stem)
             d_mp4 = DEPTH_DIR / f"{stem}_depth.mp4"
             d_mp4_p = str(d_mp4) if d_mp4.exists() else None
@@ -1181,12 +1319,52 @@ def create_stereofaster_ui():
             else:
                 SF_LOG.info(f"  -> No Depth Video found yet for '{stem}'")
                 
-            return v_p, d_mp4_p, d_npz, d_npz
+            preset_val, res_val, preview_crop = "16:9 (None)", "", None
+            if v_p:
+                preset_val, res_val, preview_crop = analyze_letterbox(v_p)
+                
+            return v_p, d_mp4_p, d_npz, d_npz, preset_val, res_val, preview_crop
             
         source_dropdown.change(
             fn=_on_hub_select,
             inputs=[source_dropdown],
-            outputs=[preview_video, preview_depth, depth_input, depth_state],
+            outputs=[preview_video, preview_depth, depth_input, depth_state, crop_preset, crop_res, crop_preview_state],
+        )
+        
+        def _toggle_preview(current_video, crop_preview):
+            # If current video is the full one, show crop preview
+            if current_video and crop_preview and "crop_preview" not in current_video:
+                return crop_preview
+            else:
+                # If currently showing cropped, or no crop exists, switch back to full
+                stem = source_dropdown.value
+                if stem:
+                    v_p, _ = select_source_video(stem)
+                    return str(v_p) if v_p and v_p.exists() else None
+            return None
+            
+        toggle_preview_btn.click(
+            fn=_toggle_preview,
+            inputs=[preview_video, crop_preview_state],
+            outputs=[preview_video],
+        )
+        
+        def _apply_crop_and_refresh(stem, preset):
+            if not stem: return gr.update(), gr.update()
+            v_p, _ = select_source_video(stem)
+            if v_p and v_p.exists():
+                execute_crop(str(v_p), preset)
+            
+            src = get_source_video_list()
+            new_stem = f"{stem}_cropped"
+            if new_stem in src:
+                return gr.update(choices=[""] + src, value=new_stem), gr.update(choices=[""] + src, value=new_stem)
+            return gr.update(choices=[""] + src), gr.update(choices=[""] + src)
+            
+        apply_crop_btn.click(
+            fn=_apply_crop_and_refresh,
+            inputs=[source_dropdown, crop_preset],
+            outputs=[source_dropdown, step1_dropdown],
         )
 
         # Wire uploaders
