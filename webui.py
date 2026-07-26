@@ -322,7 +322,7 @@ def run_depth_on_source_videos(progress=None, model_name=None, process_res=720, 
     SF_LOG.info("Batch depth processing complete")
 
 
-def run_m2svid_on_pairs(m2svid_config, m2svid_ckpt, disparity_perc, closing_kernel, mask_antialias, warping_batch_size, gen_chunk_size, progress=gr.Progress(track_tqdm=True)):
+def run_m2svid_on_pairs(m2svid_config, m2svid_ckpt, disparity_perc, closing_kernel, mask_antialias, warping_batch_size, gen_chunk_size, m2svid_process_res, progress=gr.Progress(track_tqdm=True)):
     """Process pairs in SOURCE_DIR and DEPTH_DIR and save outputs into FINAL_DIR."""
     SF_LOG.info("Starting batch M2SVid processing on source_videos + depthmaps_videos")
     cfg = m2svid_config or DEFAULT_M2SVID_CONFIG
@@ -360,7 +360,7 @@ def run_m2svid_on_pairs(m2svid_config, m2svid_ckpt, disparity_perc, closing_kern
         try:
             prev_input = STATE.get("input_video")
             STATE["input_video"] = str(vp)
-            status, gen_right, sbs, anaglyph, out_dir = step2_run_m2svid(str(depth_npz), disparity_perc, closing_kernel, mask_antialias, cfg, ckpt, input_video_path=str(vp), warping_batch_size=warping_batch_size, gen_chunk_size=gen_chunk_size, progress=progress)
+            status, gen_right, sbs, anaglyph, out_dir = step2_run_m2svid(str(depth_npz), disparity_perc, closing_kernel, mask_antialias, cfg, ckpt, input_video_path=str(vp), warping_batch_size=warping_batch_size, gen_chunk_size=gen_chunk_size, m2svid_process_res=m2svid_process_res, progress=progress)
             if out_dir and os.path.exists(out_dir):
                 try:
                     src = Path(out_dir) / "generated_right.mp4"
@@ -878,6 +878,7 @@ def step2_run_m2svid(
     input_video_path: Optional[str] = None,
     warping_batch_size: int = 2,
     gen_chunk_size: int = 14,
+    m2svid_process_res: str = "Native",
     progress=gr.Progress(track_tqdm=True)
 ) -> Tuple[str, str, str, str, str]:
     """
@@ -960,6 +961,16 @@ def step2_run_m2svid(
             reprojected_mask_t.float(), size=downsampled_resolution, mode="bilinear", antialias=bool(mask_antialias)
         )[:, [0]]
         reprojected_mask_t = reprojected_mask_t.permute(1, 0, 2, 3)
+
+        orig_shape = input_video.shape[-2:]
+        if m2svid_process_res != "Native":
+            res_str = m2svid_process_res.split(" ")[0]
+            tw, th = map(int, res_str.split("x"))
+            if orig_shape[0] != th or orig_shape[1] != tw:
+                SF_LOG.info(f"Downscaling inputs for M2SVid from {orig_shape} to {(th, tw)}")
+                input_video = torch.nn.functional.interpolate(input_video, size=(th, tw), mode="bilinear", align_corners=False)
+                reprojected = torch.nn.functional.interpolate(reprojected, size=(th, tw), mode="bilinear", align_corners=False)
+                reprojected_mask_t = torch.nn.functional.interpolate(reprojected_mask_t, size=(th, tw), mode="bilinear", align_corners=False)
 
         # prepare for generation
         num_samples = gen_chunk_size
@@ -1047,7 +1058,7 @@ def step2_run_m2svid(
             final_generated = torch.cat(chunk_outputs, dim=1)
 
         final_generated = torch.nn.functional.interpolate(
-            final_generated, size=input_video.shape[-2:], mode="bilinear", align_corners=False
+            final_generated, size=orig_shape, mode="bilinear", align_corners=False
         )
         
         # Ensure outputs are padded back to 16:9 standard resolution for hardware compatibility
@@ -1321,6 +1332,11 @@ def create_stereofaster_ui():
                         batch_m2svid_btn = gr.Button("📦 Run Batch Stereography on All Matched Pairs", variant="secondary")
                         warping_batch_size = gr.Slider(1, 16, value=_VRAM_DEFAULTS["warp"], step=1, label="Warping Batch Size (lower = less VRAM)")
                         gen_chunk_size = gr.Slider(2, 35, value=_VRAM_DEFAULTS["gen_chunk"], step=1, label="Generation Chunk Size (lower = less VRAM)")
+                        m2svid_process_res = gr.Dropdown(
+                            choices=["Native", "1280x720 (Faster)", "1024x576 (Optimal 12GB)", "768x432 (Fastest)"],
+                            value="1024x576 (Optimal 12GB)" if _VRAM_DEFAULTS["gen_chunk"] <= 5 else "Native",
+                            label="M2SVid Processing Resolution"
+                        )
 
                     with gr.Column(scale=1):
                         step2_btn = gr.Button("🎬 Convert Selected to Stereo", variant="primary", size="lg")
@@ -1445,6 +1461,7 @@ def create_stereofaster_ui():
                 preview_video,
                 warping_batch_size,
                 gen_chunk_size,
+                m2svid_process_res,
             ],
             outputs=[step2_status, out_right, out_sbs, out_anaglyph, out_dir_box],
         )
@@ -1457,7 +1474,7 @@ def create_stereofaster_ui():
         )
         batch_m2svid_btn.click(
             fn=run_m2svid_on_pairs,
-            inputs=[m2svid_config, m2svid_ckpt, disparity_perc, closing_kernel, mask_antialias, warping_batch_size, gen_chunk_size],
+            inputs=[m2svid_config, m2svid_ckpt, disparity_perc, closing_kernel, mask_antialias, warping_batch_size, gen_chunk_size, m2svid_process_res],
             outputs=None,
         )
 
