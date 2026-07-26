@@ -961,7 +961,13 @@ def step2_run_m2svid(
         orig_shape = input_video.shape[-2:]
         if m2svid_process_res != "Native":
             res_str = m2svid_process_res.split(" ")[0]
-            tw, th = map(int, res_str.split("x"))
+            tw = int(res_str.split("x")[0])
+            # Calculate height proportionally to preserve aspect ratio, preventing geometric distortion
+            th = int((orig_shape[0] / orig_shape[1]) * tw)
+            
+            # SVD requires dimensions to be exactly divisible by 8 for its VAE latent space
+            th = th - (th % 8)
+            tw = tw - (tw % 8)
             if orig_shape[0] != th or orig_shape[1] != tw:
                 SF_LOG.info(f"Downscaling inputs for M2SVid from {orig_shape} to {(th, tw)}")
                 input_video = torch.nn.functional.interpolate(input_video, size=(th, tw), mode="bilinear", align_corners=False)
