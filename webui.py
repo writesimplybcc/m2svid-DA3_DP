@@ -958,7 +958,14 @@ def step2_run_m2svid(
         reprojected = reprojected.permute(1, 0, 2, 3).float() * 2 - 1
         reprojected_mask_t = reprojected_mask_arr.permute(1, 0, 2, 3).float() * 2 - 1
 
+        import torchvision.transforms.functional as TF
         orig_shape = input_video.shape[-2:]
+        original_input_video = input_video.clone()
+        original_reprojected = reprojected.clone()
+        # Create a feathered mask [0, 1] for high-quality alpha blending later
+        original_mask = reprojected_mask_arr.permute(1, 0, 2, 3).float()
+        original_mask_soft = TF.gaussian_blur(original_mask.transpose(0, 1), kernel_size=[11, 11], sigma=[3.0, 3.0]).transpose(0, 1)
+
         if m2svid_process_res != "Native":
             res_str = m2svid_process_res.split(" ")[0]
             tw = int(res_str.split("x")[0])
@@ -1070,10 +1077,12 @@ def step2_run_m2svid(
         final_generated = torch.nn.functional.interpolate(
             final_generated, size=orig_shape, mode="bilinear", align_corners=False
         )
-        if input_video.shape[-2:] != orig_shape:
-            input_video = torch.nn.functional.interpolate(
-                input_video, size=orig_shape, mode="bilinear", align_corners=False
-            )
+        
+        # Blend the AI hallucinated pixels ONLY into the masked holes of the razor-sharp original reprojection
+        final_generated = original_reprojected * (1.0 - original_mask_soft) + final_generated * original_mask_soft
+        
+        # Restore the perfectly sharp original left eye
+        input_video = original_input_video
         
         # Ensure outputs are padded back to 16:9 standard resolution for hardware compatibility
         c, t, h, w = final_generated.shape
