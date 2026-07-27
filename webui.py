@@ -94,6 +94,11 @@ def analyze_letterbox(video_path: str) -> tuple[str, str, str]:
         return "16:9 (None)", "", ""
     
     cap = cv2.VideoCapture(video_path)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if total_frames > 24:
+        # Sample a frame from the middle of the video to avoid black fade-ins
+        cap.set(cv2.CAP_PROP_POS_FRAMES, total_frames // 2)
+        
     ret, frame = cap.read()
     cap.release()
     if not ret:
@@ -102,15 +107,14 @@ def analyze_letterbox(video_path: str) -> tuple[str, str, str]:
     h, w = frame.shape[:2]
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     _, thresh = cv2.threshold(gray, 15, 255, cv2.THRESH_BINARY)
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
-    if not contours:
+    coords = cv2.findNonZero(thresh)
+    if coords is None:
         return "16:9 (None)", f"Full: {w}x{h}", video_path
         
-    c = max(contours, key=cv2.contourArea)
-    x, y, bw, bh = cv2.boundingRect(c)
+    x, y, bw, bh = cv2.boundingRect(coords)
     
-    if bw == 0 or bh == 0 or (bw >= w - 4 and bh >= h - 4):
+    if bw == 0 or bh == 0 or (bw >= w - 10 and bh >= h - 10):
         return "16:9 (None)", f"Full: {w}x{h}", video_path
         
     detected_ratio = bw / bh
