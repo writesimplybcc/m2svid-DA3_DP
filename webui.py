@@ -188,7 +188,7 @@ def batch_auto_crop_all(force_crop_enabled=False, manual_preset="16:9 (None)", p
     vids = [p for p in SOURCE_DIR.iterdir() if p.is_file() and p.suffix.lower() in ('.mp4', '.mov', '.avi', '.mkv')]
     vids = [v for v in vids if not v.stem.endswith("_cropped")]
     if not vids:
-        return gr.update(), gr.update()
+        return gr.update(), gr.update(), gr.update()
         
     for i, vp in enumerate(vids):
         progress(float(i)/len(vids), desc=f"Auto-Cropping {vp.name}")
@@ -203,7 +203,7 @@ def batch_auto_crop_all(force_crop_enabled=False, manual_preset="16:9 (None)", p
             
     progress(1.0, desc="Batch Crop Complete!")
     src = get_source_video_list()
-    return gr.update(choices=[""] + src), gr.update(choices=[""] + src)
+    return gr.update(), gr.update(choices=[""] + src), gr.update(choices=[""] + src)
 
 
 
@@ -343,6 +343,7 @@ def run_depth_on_source_videos(progress=gr.Progress(track_tqdm=True), model_name
     src = get_source_video_list()
     dep = get_depth_video_list()
     return (
+        gr.update(),
         gr.update(choices=[""] + src),
         gr.update(choices=[""] + dep),
         gr.update(choices=[""] + src)
@@ -1378,8 +1379,8 @@ def create_stereofaster_ui():
                         batch_size = gr.Slider(1, 32, value=_VRAM_DEFAULTS["da3"], step=1, label="DA3 Batch Size")
                         
                         batch_depth_btn = gr.Button("📦 Run Batch Depth Processing on All Source Videos", variant="secondary")
-                        force_crop_preset = gr.Checkbox(label="Only use the aspect ratio from the 'Detected Preset' dropdown in File Hub", value=False)
                         batch_crop_btn = gr.Button("✂️ Run Batch Auto-crop for All Source Videos", variant="secondary")
+                        force_crop_preset = gr.Checkbox(label="Only use the aspect ratio from the 'Detected Preset' dropdown in File Hub", value=False)
                     with gr.Column(scale=1):
                         step1_dropdown = gr.Dropdown(
                             choices=get_source_video_list(),
@@ -1519,7 +1520,7 @@ def create_stereofaster_ui():
         batch_crop_btn.click(
             fn=batch_auto_crop_all,
             inputs=[force_crop_preset, crop_preset],
-            outputs=[source_dropdown, step1_dropdown],
+            outputs=[batch_crop_btn, source_dropdown, step1_dropdown],
         )
 
         # Wire step 2
@@ -1544,7 +1545,7 @@ def create_stereofaster_ui():
         batch_depth_btn.click(
             fn=run_depth_on_source_videos,
             inputs=[da3_model, process_res, batch_size],
-            outputs=[source_dropdown, depth_dropdown, step1_dropdown],
+            outputs=[batch_depth_btn, source_dropdown, depth_dropdown, step1_dropdown],
         )
         batch_m2svid_btn.click(
             fn=run_m2svid_on_pairs,
