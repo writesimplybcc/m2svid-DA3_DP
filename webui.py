@@ -335,6 +335,13 @@ def run_depth_on_source_videos(progress=gr.Progress(track_tqdm=True), model_name
             import traceback
             traceback.print_exc()
     SF_LOG.info("Batch depth processing complete")
+    src = get_source_video_list()
+    dep = get_depth_video_list()
+    return (
+        gr.update(choices=[""] + src),
+        gr.update(choices=[""] + dep),
+        gr.update(choices=[""] + src)
+    )
 
 
 def run_m2svid_on_pairs(m2svid_config, m2svid_ckpt, disparity_perc, closing_kernel, mask_antialias, warping_batch_size, gen_chunk_size, m2svid_process_res, progress=gr.Progress(track_tqdm=True)):
@@ -816,6 +823,7 @@ def _create_depth_preview_video(depth: np.ndarray, out_path: str, fps: float):
             if p_hi - p_lo < 1e-6:
                 p_hi = p_lo + 1
             norm = np.clip((d - p_lo) / (p_hi - p_lo), 0, 1)
+            norm = 1.0 - norm  # Invert so Close = White, Far = Black
             frame = (norm * 255).astype(np.uint8)
 
             if frame.shape != (h, w):
@@ -1531,7 +1539,7 @@ def create_stereofaster_ui():
         batch_depth_btn.click(
             fn=run_depth_on_source_videos,
             inputs=[da3_model, process_res, batch_size],
-            outputs=None,
+            outputs=[source_dropdown, depth_dropdown, step1_dropdown],
         )
         batch_m2svid_btn.click(
             fn=run_m2svid_on_pairs,
