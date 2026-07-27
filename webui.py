@@ -990,15 +990,17 @@ def step2_run_m2svid(
             tw = int(res_str.split("x")[0])
             # Calculate height proportionally to preserve aspect ratio, preventing geometric distortion
             th = int((orig_shape[0] / orig_shape[1]) * tw)
+        else:
+            th, tw = orig_shape[0], orig_shape[1]
             
-            # SVD requires dimensions to be exactly divisible by 8 for its VAE latent space
-            th = th - (th % 8)
-            tw = tw - (tw % 8)
-            if orig_shape[0] != th or orig_shape[1] != tw:
-                SF_LOG.info(f"Downscaling inputs for M2SVid from {orig_shape} to {(th, tw)}")
-                input_video = torch.nn.functional.interpolate(input_video, size=(th, tw), mode="bilinear", align_corners=False)
-                reprojected = torch.nn.functional.interpolate(reprojected, size=(th, tw), mode="bilinear", align_corners=False)
-                reprojected_mask_t = torch.nn.functional.interpolate(reprojected_mask_t, size=(th, tw), mode="bilinear", align_corners=False)
+        # SVD requires dimensions to be exactly divisible by 8 for its VAE latent space
+        th = th - (th % 8)
+        tw = tw - (tw % 8)
+        if orig_shape[0] != th or orig_shape[1] != tw:
+            SF_LOG.info(f"Adjusting inputs for M2SVid from {orig_shape} to {(th, tw)} (must be divisible by 8)")
+            input_video = torch.nn.functional.interpolate(input_video, size=(th, tw), mode="bilinear", align_corners=False)
+            reprojected = torch.nn.functional.interpolate(reprojected, size=(th, tw), mode="bilinear", align_corners=False)
+            reprojected_mask_t = torch.nn.functional.interpolate(reprojected_mask_t, size=(th, tw), mode="bilinear", align_corners=False)
 
         c, t, h, w = reprojected_mask_t.shape
         downsampled_resolution = [int(h / 8), int(w / 8)]
