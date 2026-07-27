@@ -823,7 +823,6 @@ def _create_depth_preview_video(depth: np.ndarray, out_path: str, fps: float):
             if p_hi - p_lo < 1e-6:
                 p_hi = p_lo + 1
             norm = np.clip((d - p_lo) / (p_hi - p_lo), 0, 1)
-            norm = 1.0 - norm  # Invert so Close = White, Far = Black
             frame = (norm * 255).astype(np.uint8)
 
             if frame.shape != (h, w):
