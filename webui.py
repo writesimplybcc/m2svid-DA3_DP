@@ -962,9 +962,8 @@ def step2_run_m2svid(
         orig_shape = input_video.shape[-2:]
         original_input_video = input_video.clone()
         original_reprojected = reprojected.clone()
-        # Create a feathered mask [0, 1] for high-quality alpha blending later
+        # Create a hard mask [0, 1] for alpha blending later (no blur, avoids leaking black holes)
         original_mask = reprojected_mask_arr.permute(1, 0, 2, 3).float()
-        original_mask_soft = TF.gaussian_blur(original_mask.transpose(0, 1), kernel_size=[3, 3], sigma=[1.0, 1.0]).transpose(0, 1)
 
         if m2svid_process_res != "Native":
             res_str = m2svid_process_res.split(" ")[0]
@@ -995,11 +994,20 @@ def step2_run_m2svid(
         SF_LOG.info(f"Video length {T} frames; model.max_frames={num_samples}")
 
         def _save_video(video_tensor, fps_val, path):
-            frames = video_tensor.cpu().numpy().transpose(0, 2, 3, 4, 1)
-            frames = np.concatenate(frames)
-            frames = (((frames + 1) / 2).clip(0, 1) * 255).astype(np.uint8)
             import torchvision.io
-            torchvision.io.write_video(path, frames, fps=int(fps_val), options={"crf": "17"})
+            import numpy as np
+            T_val = video_tensor.shape[2]
+            frames_list = []
+            for i in range(T_val):
+                frame = video_tensor[0, :, i, :, :] # [C, H, W]
+                # In-place math to drastically reduce system RAM spikes (prevents 20GB memory leaks)
+                frame = ((frame + 1.0) / 2.0).clamp(0, 1) * 255.0
+                frame = frame.to(torch.uint8).cpu().numpy()
+                frame = frame.transpose(1, 2, 0) # [H, W, C]
+                frames_list.append(frame)
+                
+            frames_arr = np.stack(frames_list, axis=0) # [T, H, W, C]
+            torchvision.io.write_video(path, frames_arr, fps=int(fps_val), options={"crf": "17"})
             written = os.path.getsize(path) if os.path.exists(path) else 0
             SF_LOG.info(f"Wrote {written} bytes to {path}")
             if written < 1024:
@@ -1079,7 +1087,7 @@ def step2_run_m2svid(
         )
         
         # Blend the AI hallucinated pixels ONLY into the masked holes of the razor-sharp original reprojection
-        final_generated = original_reprojected * (1.0 - original_mask_soft) + final_generated * original_mask_soft
+        final_generated = original_reprojected * (1.0 - original_mask) + final_generated * original_mask
         
         # Restore the perfectly sharp original left eye
         input_video = original_input_video
