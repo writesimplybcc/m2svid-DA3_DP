@@ -314,7 +314,7 @@ def run_depth_on_source_videos(progress=None, model_name=None, process_res=720, 
                 else:
                     depth = np.zeros_like(inv_depth)
             else:
-                depth = run_da3_depth(frames, model_name=model_name, process_res=process_res, device=device, batch_size=batch_size)
+                depth = run_da3_depth(frames, model_name=model_name, process_res=process_res, device=device, batch_size=batch_size, progress=progress)
                 depth = -depth
                 
             if depth.shape[1:] != (h, w):
@@ -715,6 +715,7 @@ def step1_run_da3_depth(
                 process_res=process_res,
                 device=device,
                 batch_size=batch_size,
+                progress=progress,
             )
             depth = -depth
 
