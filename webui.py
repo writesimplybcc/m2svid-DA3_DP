@@ -342,6 +342,10 @@ def run_depth_on_source_videos(progress=gr.Progress(track_tqdm=True), model_name
     SF_LOG.info("Batch depth processing complete")
     src = get_source_video_list()
     dep = get_depth_video_list()
+    
+    from m2svid.m2svid.prepare_da3_depth import unload_da3_model
+    unload_da3_model()
+    
     return (
         gr.update(),
         gr.update(choices=[""] + src),
@@ -757,6 +761,10 @@ def step1_run_da3_depth(
         _create_depth_preview_video(depth, str(depth_vis_path), fps)
 
         progress(1.0, desc="Depth estimation complete")
+        
+        from m2svid.m2svid.prepare_da3_depth import unload_da3_model
+        unload_da3_model()
+        
         clear_cuda()
 
         status = f"✅ {model_type_str} depth computed ({depth.shape[0]} frames). Ready for Step 2."

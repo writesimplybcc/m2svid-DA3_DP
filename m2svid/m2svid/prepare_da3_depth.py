@@ -68,6 +68,17 @@ def load_video_frames(video_path: str, target_fps: float = 0.0) -> tuple[list[np
 _cached_da3_model = None
 _cached_da3_model_name = None
 
+def unload_da3_model():
+    global _cached_da3_model, _cached_da3_model_name
+    if _cached_da3_model is not None:
+        print("[DA3] Unloading model to free VRAM")
+        del _cached_da3_model
+        _cached_da3_model = None
+        _cached_da3_model_name = None
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
 def run_da3_depth(
     frames: list,
     model_name: str = "depth-anything/DA3NESTED-GIANT-LARGE-1.1",
@@ -91,7 +102,11 @@ def run_da3_depth(
 
     if _cached_da3_model is None or _cached_da3_model_name != model_name:
         print(f"[DA3] Loading model: {model_name}")
-        _cached_da3_model = DepthAnything3.from_pretrained(model_name).to(device).eval()
+        try:
+            _cached_da3_model = DepthAnything3.from_pretrained(model_name, local_files_only=True).to(device).eval()
+        except Exception:
+            print(f"[DA3] Model not found locally, falling back to download...")
+            _cached_da3_model = DepthAnything3.from_pretrained(model_name, local_files_only=False).to(device).eval()
         _cached_da3_model_name = model_name
     
     model = _cached_da3_model
