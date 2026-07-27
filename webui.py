@@ -964,7 +964,7 @@ def step2_run_m2svid(
         original_reprojected = reprojected.clone()
         # Create a feathered mask [0, 1] for high-quality alpha blending later
         original_mask = reprojected_mask_arr.permute(1, 0, 2, 3).float()
-        original_mask_soft = TF.gaussian_blur(original_mask.transpose(0, 1), kernel_size=[11, 11], sigma=[3.0, 3.0]).transpose(0, 1)
+        original_mask_soft = TF.gaussian_blur(original_mask.transpose(0, 1), kernel_size=[3, 3], sigma=[1.0, 1.0]).transpose(0, 1)
 
         if m2svid_process_res != "Native":
             res_str = m2svid_process_res.split(" ")[0]
@@ -1084,6 +1084,12 @@ def step2_run_m2svid(
         # Restore the perfectly sharp original left eye
         input_video = original_input_video
         
+        # Crop the left edge of the right eye (hallucinated) and the right edge of the left eye (stereo window adjustment)
+        crop_pixels = int(w * disparity_perc)
+        if crop_pixels > 0:
+            final_generated = final_generated[:, :, :, crop_pixels:]
+            input_video = input_video[:, :, :, :-crop_pixels]
+            
         # Ensure outputs are padded back to 16:9 standard resolution for hardware compatibility
         c, t, h, w = final_generated.shape
         target_h, target_w = h, w
