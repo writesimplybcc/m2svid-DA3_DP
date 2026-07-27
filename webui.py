@@ -271,8 +271,19 @@ def run_depth_on_source_videos(progress=None, model_name=None, process_res=720, 
     suffix = get_model_suffix(model_name)
     
     vids = [p for p in SOURCE_DIR.iterdir() if p.is_file() and p.suffix.lower() in ('.mp4', '.mov', '.avi', '.mkv')]
+    
+    final_vids = []
+    stems_in_dir = {p.stem for p in vids}
+    for vp in vids:
+        if not vp.stem.endswith("_cropped"):
+            if f"{vp.stem}_cropped" in stems_in_dir:
+                SF_LOG.info(f"Skipping {vp.name} because a _cropped version exists")
+                continue
+        final_vids.append(vp)
+        
+    vids = final_vids
     total = len(vids)
-    SF_LOG.info(f"Found {total} video(s) in source_videos")
+    SF_LOG.info(f"Found {total} video(s) in source_videos to process after filtering")
     
     for i, vp in enumerate(vids):
         stem = vp.stem
@@ -1352,7 +1363,7 @@ def create_stereofaster_ui():
                         batch_size = gr.Slider(1, 32, value=_VRAM_DEFAULTS["da3"], step=1, label="DA3 Batch Size")
                         
                         batch_depth_btn = gr.Button("📦 Run Batch Depth Processing on All Source Videos", variant="secondary")
-                        batch_crop_btn = gr.Button("✂️ Batch Auto-Crop All Widescreen/IMAX Videos", variant="secondary")
+                        batch_crop_btn = gr.Button("✂️ Run Batch Auto-crop for All Source Videos", variant="secondary")
                     with gr.Column(scale=1):
                         step1_dropdown = gr.Dropdown(
                             choices=get_source_video_list(),
