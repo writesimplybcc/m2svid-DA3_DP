@@ -1530,7 +1530,7 @@ def create_stereofaster_ui():
         # Batch buttons
         batch_depth_btn.click(
             fn=run_depth_on_source_videos,
-            inputs=[gr.State(), da3_model, process_res, batch_size],
+            inputs=[da3_model, process_res, batch_size],
             outputs=None,
         )
         batch_m2svid_btn.click(
