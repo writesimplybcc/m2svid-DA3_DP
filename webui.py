@@ -263,7 +263,7 @@ def run_depth_pro_depth(
     depth = np.stack(depths, axis=0)
     return depth
 
-def run_depth_on_source_videos(progress=None, model_name=None, process_res=720, batch_size=4):
+def run_depth_on_source_videos(progress=gr.Progress(track_tqdm=True), model_name=None, process_res=720, batch_size=4):
     """Process all videos in SOURCE_DIR and save depth .npz and depth_depth.mp4 in DEPTH_DIR if missing."""
     SF_LOG.info(f"Starting batch depth processing with model {model_name} on source_videos directory")
     global DEFAULT_DA3_MODEL
