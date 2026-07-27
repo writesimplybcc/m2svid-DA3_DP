@@ -360,7 +360,8 @@ def run_m2svid_on_pairs(m2svid_config, m2svid_ckpt, disparity_perc, closing_kern
         try:
             prev_input = STATE.get("input_video")
             STATE["input_video"] = str(vp)
-            status, gen_right, sbs, anaglyph, out_dir = step2_run_m2svid(str(depth_npz), disparity_perc, closing_kernel, mask_antialias, cfg, ckpt, input_video_path=str(vp), warping_batch_size=warping_batch_size, gen_chunk_size=gen_chunk_size, m2svid_process_res=m2svid_process_res, progress=progress)
+            prefix = f"[{i+1}/{total}: {stem}] "
+            status, gen_right, sbs, anaglyph, out_dir = step2_run_m2svid(str(depth_npz), disparity_perc, closing_kernel, mask_antialias, cfg, ckpt, input_video_path=str(vp), warping_batch_size=warping_batch_size, gen_chunk_size=gen_chunk_size, m2svid_process_res=m2svid_process_res, progress=progress, progress_prefix=prefix)
             if out_dir and os.path.exists(out_dir):
                 try:
                     src = Path(out_dir) / "generated_right.mp4"
@@ -879,7 +880,8 @@ def step2_run_m2svid(
     warping_batch_size: int = 2,
     gen_chunk_size: int = 14,
     m2svid_process_res: str = "Native",
-    progress=gr.Progress(track_tqdm=True)
+    progress=gr.Progress(track_tqdm=True),
+    progress_prefix: str = ""
 ) -> Tuple[str, str, str, str, str]:
     """
     Performs the M2SVid stage:
@@ -899,6 +901,9 @@ def step2_run_m2svid(
 
     video_path = input_video_path
     stem = Path(video_path).stem
+    if not progress_prefix:
+        progress_prefix = f"[{stem}] "
+        
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     out_dir = FINAL_DIR / f"{stem}_stereo_{timestamp}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -934,7 +939,7 @@ def step2_run_m2svid(
 
         try:
             if progress:
-                progress(0.35, desc="Geometric warping complete. Starting 1-step M2SVid generation...")
+                progress(0.35, desc=f"{progress_prefix}Geometric warping complete. Starting 1-step M2SVid generation...")
         except TypeError:
             pass
 
@@ -1030,7 +1035,7 @@ def step2_run_m2svid(
             clear_cuda()
             try:
                 if progress:
-                    progress(0.55 if not T else 0.55, desc="Running 1-step conditioned generation (heavy)...")
+                    progress(0.55 if not T else 0.55, desc=f"{progress_prefix}Running 1-step conditioned generation (heavy)...")
             except TypeError:
                 pass
             with torch.inference_mode():
@@ -1068,7 +1073,7 @@ def step2_run_m2svid(
                 t0 = time.time()
                 try:
                     if progress:
-                        progress(0.55 + 0.30 * (idx / total_chunks), desc=f"Generating chunk {idx+1}/{total_chunks}...")
+                        progress(0.55 + 0.30 * (idx / total_chunks), desc=f"{progress_prefix}Generating chunk {idx+1}/{total_chunks}...")
                 except TypeError:
                     pass
                 with torch.inference_mode():
@@ -1141,7 +1146,8 @@ def step2_run_m2svid(
         else:
             anaglyph = None
 
-        progress(1.0, desc="M2SVid stage complete!")
+        if progress:
+            progress(1.0, desc=f"{progress_prefix}M2SVid stage complete!")
         clear_cuda()
 
         status = "✅ M2SVid conversion finished. Download the results below."
