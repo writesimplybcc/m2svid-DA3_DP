@@ -65,8 +65,11 @@ def load_video_frames(video_path: str, target_fps: float = 0.0) -> tuple[list[np
     return frames, actual_fps, (h, w)
 
 
+_cached_da3_model = None
+_cached_da3_model_name = None
+
 def run_da3_depth(
-    frames: list[np.ndarray],
+    frames: list,
     model_name: str = "depth-anything/DA3NESTED-GIANT-LARGE-1.1",
     process_res: int = 504,
     device: str = "cuda",
@@ -79,13 +82,19 @@ def run_da3_depth(
     Returns:
         depth: np.ndarray of shape (T, H_out, W_out)  -- note: may be at process_res resolution
     """
+    global _cached_da3_model, _cached_da3_model_name
+    
     # Lazy import: only load the heavy DA3 model (and any optional 3DGS code) when this function is actually called.
     # This saves VRAM and avoids pulling in gsplat until the user triggers depth estimation.
     from depth_anything_3.api import DepthAnything3
     from depth_anything_3.utils.io.input_processor import InputProcessor
 
-    print(f"[DA3] Loading model: {model_name}")
-    model = DepthAnything3.from_pretrained(model_name).to(device).eval()
+    if _cached_da3_model is None or _cached_da3_model_name != model_name:
+        print(f"[DA3] Loading model: {model_name}")
+        _cached_da3_model = DepthAnything3.from_pretrained(model_name).to(device).eval()
+        _cached_da3_model_name = model_name
+    
+    model = _cached_da3_model
 
     depths = []
     total_batches = (len(frames) + batch_size - 1) // batch_size
