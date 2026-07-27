@@ -184,7 +184,7 @@ def execute_crop(video_path: str, preset: str, progress=gr.Progress(track_tqdm=T
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return out_path
 
-def batch_auto_crop_all(progress=gr.Progress(track_tqdm=True)):
+def batch_auto_crop_all(force_crop_enabled=False, manual_preset="16:9 (None)", progress=gr.Progress(track_tqdm=True)):
     vids = [p for p in SOURCE_DIR.iterdir() if p.is_file() and p.suffix.lower() in ('.mp4', '.mov', '.avi', '.mkv')]
     vids = [v for v in vids if not v.stem.endswith("_cropped")]
     if not vids:
@@ -192,7 +192,12 @@ def batch_auto_crop_all(progress=gr.Progress(track_tqdm=True)):
         
     for i, vp in enumerate(vids):
         progress(float(i)/len(vids), desc=f"Auto-Cropping {vp.name}")
-        preset, _, _ = analyze_letterbox(str(vp))
+        
+        if force_crop_enabled:
+            preset = manual_preset
+        else:
+            preset, _, _ = analyze_letterbox(str(vp))
+            
         if preset != "16:9 (None)":
             execute_crop(str(vp), preset, progress=None)
             
@@ -1373,6 +1378,7 @@ def create_stereofaster_ui():
                         batch_size = gr.Slider(1, 32, value=_VRAM_DEFAULTS["da3"], step=1, label="DA3 Batch Size")
                         
                         batch_depth_btn = gr.Button("📦 Run Batch Depth Processing on All Source Videos", variant="secondary")
+                        force_crop_preset = gr.Checkbox(label="Only use the aspect ratio from the 'Detected Preset' dropdown in File Hub", value=False)
                         batch_crop_btn = gr.Button("✂️ Run Batch Auto-crop for All Source Videos", variant="secondary")
                     with gr.Column(scale=1):
                         step1_dropdown = gr.Dropdown(
@@ -1512,7 +1518,7 @@ def create_stereofaster_ui():
 
         batch_crop_btn.click(
             fn=batch_auto_crop_all,
-            inputs=[],
+            inputs=[force_crop_preset, crop_preset],
             outputs=[source_dropdown, step1_dropdown],
         )
 
