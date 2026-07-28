@@ -343,7 +343,7 @@ def run_depth_on_source_videos(progress=gr.Progress(track_tqdm=True), model_name
     src = get_source_video_list()
     dep = get_depth_video_list()
     
-    from m2svid.m2svid.prepare_da3_depth import unload_da3_model
+    from m2svid.prepare_da3_depth import unload_da3_model
     unload_da3_model()
     
     return (
@@ -762,7 +762,7 @@ def step1_run_da3_depth(
 
         progress(1.0, desc="Depth estimation complete")
         
-        from m2svid.m2svid.prepare_da3_depth import unload_da3_model
+        from m2svid.prepare_da3_depth import unload_da3_model
         unload_da3_model()
         
         clear_cuda()
