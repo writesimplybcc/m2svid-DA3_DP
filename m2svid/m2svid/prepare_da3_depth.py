@@ -102,11 +102,7 @@ def run_da3_depth(
 
     if _cached_da3_model is None or _cached_da3_model_name != model_name:
         print(f"[DA3] Loading model: {model_name}")
-        try:
-            _cached_da3_model = DepthAnything3.from_pretrained(model_name, local_files_only=True).to(device).eval()
-        except Exception:
-            print(f"[DA3] Model not found locally, falling back to download...")
-            _cached_da3_model = DepthAnything3.from_pretrained(model_name, local_files_only=False).to(device).eval()
+        _cached_da3_model = DepthAnything3.from_pretrained(model_name).to(device).eval()
         _cached_da3_model_name = model_name
     
     model = _cached_da3_model
