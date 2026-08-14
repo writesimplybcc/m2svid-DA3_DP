@@ -1484,8 +1484,8 @@ def create_stereofaster_ui():
         def _apply_crop_and_refresh(stem, preset):
             if not stem: return gr.update(), gr.update()
             v_p, _ = select_source_video(stem)
-            if v_p and v_p.exists():
-                execute_crop(str(v_p), preset)
+            if v_p:
+                execute_crop(v_p, preset)
             
             src = get_source_video_list()
             new_stem = f"{stem}_cropped"
