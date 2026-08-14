@@ -1338,7 +1338,7 @@ def create_stereofaster_ui():
                             format="mp4"
                         )
                         
-                        with gr.Accordion("✂️ Auto-Crop Aspect Ratio", open=False):
+                        with gr.Accordion("✂️ Auto-Crop Aspect Ratio", open=True):
                             crop_preset = gr.Dropdown(choices=list(ASPECT_RATIO_PRESETS.keys()), value="16:9 (None)", label="Detected Preset", interactive=True)
                             crop_res = gr.Textbox(value="", label="Remaining Resolution", interactive=False)
                             toggle_preview_btn = gr.Button("🔄 Toggle View: Full vs Cropped Preview")
