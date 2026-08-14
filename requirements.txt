@@ -26,7 +26,7 @@
 # =============================================================================
 torch>=2.0.0
 torchvision>=0.15.0
-# xformers>=0.0.22          # Strongly recommended for DA3 speed/quality
+xformers>=0.0.22          # Strongly recommended for DA3 & M2SVid speed/quality
 
 # =============================================================================
 # DA3 (Depth Anything 3) Core Dependencies
