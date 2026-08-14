@@ -1053,24 +1053,43 @@ def step2_run_m2svid(
         SF_LOG.info(f"Video length {T} frames; model.max_frames={num_samples}")
 
         def _save_video(video_tensor, fps_val, path):
-            import torchvision.io
             import numpy as np
+            import cv2
             T_val = video_tensor.shape[2]
-            frames_list = []
+            
+            fourcc_candidates = [
+                cv2.VideoWriter_fourcc(*"avc1"),
+                cv2.VideoWriter_fourcc(*"X264"),
+                cv2.VideoWriter_fourcc(*"H264"),
+                cv2.VideoWriter_fourcc(*"mp4v"),
+            ]
+            
+            H, W = video_tensor.shape[3], video_tensor.shape[4]
+            writer = None
+            for fourcc in fourcc_candidates:
+                writer = cv2.VideoWriter(path, fourcc, float(fps_val), (W, H), isColor=True)
+                if writer.isOpened():
+                    break
+                writer.release()
+                writer = None
+                
+            if writer is None:
+                raise RuntimeError(f"Failed to open VideoWriter for {path} with any codec.")
+
             for i in range(T_val):
                 frame = video_tensor[0, :, i, :, :] # [C, H, W]
-                # In-place math to drastically reduce system RAM spikes (prevents 20GB memory leaks)
                 frame = ((frame + 1.0) / 2.0).clamp(0, 1) * 255.0
                 frame = frame.to(torch.uint8).cpu().numpy()
                 frame = frame.transpose(1, 2, 0) # [H, W, C]
-                frames_list.append(frame)
+                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                writer.write(frame_bgr)
                 
-            frames_arr = np.stack(frames_list, axis=0) # [T, H, W, C]
-            torchvision.io.write_video(path, frames_arr, fps=int(fps_val), options={"crf": "17"})
+            writer.release()
             written = os.path.getsize(path) if os.path.exists(path) else 0
             SF_LOG.info(f"Wrote {written} bytes to {path}")
             if written < 1024:
-                os.remove(path)
+                try: os.remove(path)
+                except: pass
                 raise RuntimeError(f"Written file suspiciously small ({written} bytes), removed: {path}")
 
         final_generated = torch.empty(0)
