@@ -101,6 +101,21 @@ def analyze_letterbox(video_path: str) -> tuple[str, str, str]:
         
     ret, frame = cap.read()
     cap.release()
+    
+    # Fallback to FFmpeg if OpenCV is missing the right codec for this video!
+    if not ret:
+        import subprocess
+        tmp_img = str(SOURCE_DIR / "tmp_detect_frame.jpg")
+        cmd = ["ffmpeg", "-y", "-ss", "00:00:02", "-i", video_path, "-vframes", "1", "-q:v", "2", tmp_img]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if os.path.exists(tmp_img):
+            frame = cv2.imread(tmp_img)
+            if frame is not None:
+                ret = True
+            try:
+                os.remove(tmp_img)
+            except: pass
+
     if not ret:
         return "16:9 (None)", "", ""
         
