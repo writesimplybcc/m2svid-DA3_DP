@@ -1504,11 +1504,20 @@ def create_stereofaster_ui():
             fn=handle_source_upload,
             inputs=[source_uploader],
             outputs=[preview_video, source_dropdown],
+        ).then(
+            fn=_on_hub_select,
+            inputs=[source_dropdown],
+            outputs=[preview_video, preview_depth, depth_input, depth_state, crop_preset, crop_res, crop_preview_state],
         )
+        
         depth_uploader.upload(
             fn=handle_depth_upload,
             inputs=[depth_uploader],
             outputs=[preview_depth, source_dropdown],
+        ).then(
+            fn=_on_hub_select,
+            inputs=[source_dropdown],
+            outputs=[preview_video, preview_depth, depth_input, depth_state, crop_preset, crop_res, crop_preview_state],
         )
 
         # Wire step 1
