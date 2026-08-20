@@ -10,7 +10,7 @@ filebrowser -r /workspace/m2svid-DA3_DP -p 7879 -a 0.0.0.0 --noauth &
 
 # Wait a moment to ensure it starts
 sleep 2
-echo "FileBrowser is running on port 8080"
+echo "FileBrowser is running on port 7879"
 
 # Start the Gradio WebUI in the foreground so the container stays alive
 echo "Starting Gradio WebUI..."

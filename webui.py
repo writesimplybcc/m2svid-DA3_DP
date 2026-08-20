@@ -44,6 +44,16 @@ import numpy as np
 import cv2
 import ffmpeg
 
+# --- PyTorch VRAM & Speed Optimizations for RTX 3000/4000 series ---
+# Disable brutal 3-minute benchmarking on Chunk 1 (forces fast heuristics instead)
+torch.backends.cudnn.benchmark = False
+torch.backends.cudnn.deterministic = False
+# Enable TensorCores for insane speedups on RTX cards
+if torch.cuda.is_available():
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+# -------------------------------------------------------------------
+
 # Ensure project paths (match what inference scripts use)
 PROJECT_ROOT = Path(__file__).parent.resolve()
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -1383,6 +1393,9 @@ def create_stereofaster_ui():
                             crop_res = gr.Textbox(value="", label="Remaining Resolution", interactive=False)
                             toggle_preview_btn = gr.Button("🔄 Toggle View: Full vs Cropped Preview")
                             apply_crop_btn = gr.Button("✂️ Apply Crop and Save as New Video", variant="primary")
+                            gr.Markdown("---")
+                            force_crop_preset = gr.Checkbox(label="Only use the aspect ratio from the 'Detected Preset' dropdown for batch cropping", value=False)
+                            batch_crop_btn = gr.Button("✂️ Run Batch Auto-crop for All Source Videos", variant="secondary")
                             crop_preview_state = gr.State(None)
                         
                     with gr.Column():
@@ -1425,10 +1438,7 @@ def create_stereofaster_ui():
                         )
                         process_res = gr.Slider(384, 1024, value=720, step=32, label="DA3 Resolution")
                         batch_size = gr.Slider(1, 32, value=_VRAM_DEFAULTS["da3"], step=1, label="DA3 Batch Size")
-                        
                         batch_depth_btn = gr.Button("📦 Run Batch Depth Processing on All Source Videos", variant="secondary")
-                        batch_crop_btn = gr.Button("✂️ Run Batch Auto-crop for All Source Videos", variant="secondary")
-                        force_crop_preset = gr.Checkbox(label="Only use the aspect ratio from the 'Detected Preset' dropdown in File Hub", value=False)
                     with gr.Column(scale=1):
                         step1_dropdown = gr.Dropdown(
                             choices=[""] + get_source_video_list(),

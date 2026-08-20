@@ -62,10 +62,9 @@ def process_video_with_depth(
             for depth_frame in depth_batch
         ])
 
-        # Introduce a 0.5 Convergence Point (Zero Parallax Setting)
-        # Without this, M2SVid hardcodes convergence at the background (depth=0)
-        # forcing the entire video to pop violently out of the screen.
-        disparities = (depth_batch - 0.5) * disparity_scale
+        # Introduce a 0.7 Convergence Point (Zero Parallax Setting)
+        # Puts the main subject closer to the screen plane, treating the screen like a window
+        disparities = (depth_batch - 0.7) * disparity_scale
 
         reprojected_right_videos = []
         reprojected_right_masks = []
