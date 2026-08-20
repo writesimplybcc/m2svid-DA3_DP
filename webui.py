@@ -1200,11 +1200,10 @@ def step2_run_m2svid(
         # Restore the perfectly sharp original left eye
         input_video = original_input_video
         
-        # Crop the left edge of the right eye (hallucinated) and the right edge of the left eye (stereo window adjustment)
-        crop_pixels = int(w * disparity_perc)
-        if crop_pixels > 0:
-            final_generated = final_generated[:, :, :, crop_pixels:]
-            input_video = input_video[:, :, :, :-crop_pixels]
+        # Removed the hacky M2SVid edge crop!
+        # Because we injected a mathematically correct Convergence Point (Zero Parallax) 
+        # directly into warping.py, doing this manual crop would double-shift the video 
+        # out of bounds and completely destroy the 3D effect!
             
         # Ensure outputs are padded back to 16:9 standard resolution for hardware compatibility
         c, t, h, w = final_generated.shape
