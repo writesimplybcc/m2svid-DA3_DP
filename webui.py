@@ -1459,7 +1459,7 @@ def create_stereofaster_ui():
                 with gr.Row():
                     with gr.Column(scale=2):
                         disparity_perc = gr.Slider(0.01, 0.2, value=0.05, step=0.005, label="Disparity Scale")
-                        convergence_point = gr.Slider(0.0, 1.0, value=0.5, step=0.05, label="Convergence Point (Zero Parallax)")
+                        convergence_point = gr.Slider(0.0, 1.0, value=0.5, step=0.05, label="Convergence Point (Zero Parallax)", info="Default is 0.5. Higher values = looking through window effect. Lower values = 3D pop-outs.")
                         closing_kernel = gr.Slider(3, 21, value=11, step=2, label="Mask Closing Kernel")
                         mask_antialias = gr.Checkbox(label="Mask Antialias", value=False)
                         
