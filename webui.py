@@ -750,6 +750,12 @@ def step1_run_da3_depth(
                 progress=progress,
             )
             depth = -depth
+            # Global temporal normalization for DA3 to prevent M2SVid shifting/jitter!
+            d_min, d_max = depth.min(), depth.max()
+            if d_max - d_min > 1e-6:
+                depth = (depth - d_min) / (d_max - d_min)
+            else:
+                depth = np.zeros_like(depth)
 
         if depth.shape[1:] != (h, w):
             depth = np.stack([cv2.resize(d, (w, h), cv2.INTER_CUBIC) for d in depth])
@@ -945,11 +951,11 @@ def step2_run_m2svid(
     SF_LOG.debug(f"Depth npz: {depth_npz_path}")
     if not depth_npz_path or not os.path.exists(depth_npz_path):
         SF_LOG.error("No depth file provided")
-        return "No depth file from Step 1. Please run Step 1 first or upload a compatible depth.npz.", "", "", "", ""
+        return "No depth file from Step 1. Please run Step 1 first or upload a compatible depth.npz.", None, None, None, None
 
     if input_video_path is None:
         SF_LOG.error("No input video provided")
-        return "Original video not provided. Please select or upload a source video in Step 1 or File Hub.", "", "", "", ""
+        return "No source video selected.", None, None, None, None
 
     video_path = input_video_path
     stem = Path(video_path).stem
