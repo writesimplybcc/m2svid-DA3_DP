@@ -29,9 +29,9 @@ def scatter_image(
   disparity_map = (inverse_depth.astype(np.float32) * scale_factor).astype(
       np.float32
   )
-  disparity_map_int = disparity_map.astype(np.int32)
+  disparity_map_int = np.floor(disparity_map).astype(np.int32)
   weight_for_plus1 = disparity_map - disparity_map_int.astype(np.float32)
-  disparity_map_int_plus1 = (disparity_map + 1.0).astype(np.int32)
+  disparity_map_int_plus1 = disparity_map_int + 1
 
   x_coords, _ = np.meshgrid(np.arange(w), np.arange(h))
   reproj_x_coords = x_coords + (disparity_map_int * direction)
