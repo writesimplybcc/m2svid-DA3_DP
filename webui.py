@@ -1393,9 +1393,9 @@ def create_stereofaster_ui():
                             type="filepath"
                         )
                         depth_dropdown = gr.Dropdown(
-                            choices=get_depth_video_list(),
+                            choices=[""] + get_depth_video_list(),
                             value="",
-                            label="Select Depth Video to Review",
+                            label="Select Depth Map from Folder",
                             interactive=True,
                             allow_custom_value=True,
                         )
@@ -1431,10 +1431,11 @@ def create_stereofaster_ui():
                         force_crop_preset = gr.Checkbox(label="Only use the aspect ratio from the 'Detected Preset' dropdown in File Hub", value=False)
                     with gr.Column(scale=1):
                         step1_dropdown = gr.Dropdown(
-                            choices=get_source_video_list(),
+                            choices=[""] + get_source_video_list(),
                             value="",
                             label="Select Source Video",
                             interactive=True,
+                            allow_custom_value=True,
                         )
                         step1_btn = gr.Button("⚡ Estimate Depth for Selected Video", variant="primary", size="lg")
                         step1_status = gr.Textbox(label="Estimation Progress", interactive=False)
