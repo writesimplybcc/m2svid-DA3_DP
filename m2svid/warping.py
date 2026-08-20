@@ -34,6 +34,7 @@ def process_video_with_depth(
     disparity_scale=None,
     disparity_perc=None,
     batch_size=10,
+    convergence_point=0.5,
 ):
     relative_depth_data = np.load(depth_path)
     relative_depth = relative_depth_data['depth']
@@ -62,9 +63,9 @@ def process_video_with_depth(
             for depth_frame in depth_batch
         ])
 
-        # Introduce a 0.7 Convergence Point (Zero Parallax Setting)
+        # Introduce a Convergence Point (Zero Parallax Setting)
         # Puts the main subject closer to the screen plane, treating the screen like a window
-        disparities = (depth_batch - 0.7) * disparity_scale
+        disparities = (depth_batch - convergence_point) * disparity_scale
 
         reprojected_right_videos = []
         reprojected_right_masks = []

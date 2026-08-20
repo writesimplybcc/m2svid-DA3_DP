@@ -379,7 +379,7 @@ def run_depth_on_source_videos(progress=gr.Progress(track_tqdm=True), model_name
     )
 
 
-def run_m2svid_on_pairs(m2svid_config, m2svid_ckpt, disparity_perc, closing_kernel, mask_antialias, warping_batch_size, gen_chunk_size, m2svid_process_res, progress=gr.Progress(track_tqdm=True)):
+def run_m2svid_on_pairs(m2svid_config, m2svid_ckpt, disparity_perc, convergence_point, closing_kernel, mask_antialias, warping_batch_size, gen_chunk_size, m2svid_process_res, progress=gr.Progress(track_tqdm=True)):
     """Process pairs in SOURCE_DIR and DEPTH_DIR and save outputs into FINAL_DIR."""
     SF_LOG.info("Starting batch M2SVid processing on source_videos + depthmaps_videos")
     cfg = m2svid_config or DEFAULT_M2SVID_CONFIG
@@ -418,7 +418,7 @@ def run_m2svid_on_pairs(m2svid_config, m2svid_ckpt, disparity_perc, closing_kern
             prev_input = STATE.get("input_video")
             STATE["input_video"] = str(vp)
             prefix = f"[{i+1}/{total}: {stem}] "
-            status, gen_right, sbs, anaglyph, out_dir = step2_run_m2svid(str(depth_npz), disparity_perc, closing_kernel, mask_antialias, cfg, ckpt, input_video_path=str(vp), warping_batch_size=warping_batch_size, gen_chunk_size=gen_chunk_size, m2svid_process_res=m2svid_process_res, progress=progress, progress_prefix=prefix)
+            status, gen_right, sbs, anaglyph, out_dir = step2_run_m2svid(str(depth_npz), disparity_perc, convergence_point, closing_kernel, mask_antialias, cfg, ckpt, input_video_path=str(vp), warping_batch_size=warping_batch_size, gen_chunk_size=gen_chunk_size, m2svid_process_res=m2svid_process_res, progress=progress, progress_prefix=prefix)
             if out_dir and os.path.exists(out_dir):
                 try:
                     src = Path(out_dir) / "generated_right.mp4"
@@ -940,6 +940,7 @@ def _load_m2svid_model(config_path: str, ckpt_path: str):
 def step2_run_m2svid(
     depth_npz_path: str,
     disparity_perc: float,
+    convergence_point: float,
     reprojected_closing_kernel: int,
     mask_antialias: bool,
     m2svid_config: str,
@@ -1002,6 +1003,7 @@ def step2_run_m2svid(
             output_path_mask=str(reprojected_mask),
             disparity_perc=disparity_perc,
             batch_size=warping_batch_size,
+            convergence_point=convergence_point,
         )
         SF_LOG.info("Geometric warping complete")
 
@@ -1457,6 +1459,7 @@ def create_stereofaster_ui():
                 with gr.Row():
                     with gr.Column(scale=2):
                         disparity_perc = gr.Slider(0.01, 0.2, value=0.05, step=0.005, label="Disparity Scale")
+                        convergence_point = gr.Slider(0.0, 1.0, value=0.5, step=0.05, label="Convergence Point (Zero Parallax)")
                         closing_kernel = gr.Slider(3, 21, value=11, step=2, label="Mask Closing Kernel")
                         mask_antialias = gr.Checkbox(label="Mask Antialias", value=False)
                         
@@ -1597,6 +1600,7 @@ def create_stereofaster_ui():
             inputs=[
                 depth_input,
                 disparity_perc,
+                convergence_point,
                 closing_kernel,
                 mask_antialias,
                 m2svid_config,
@@ -1617,7 +1621,7 @@ def create_stereofaster_ui():
         )
         batch_m2svid_btn.click(
             fn=run_m2svid_on_pairs,
-            inputs=[m2svid_config, m2svid_ckpt, disparity_perc, closing_kernel, mask_antialias, warping_batch_size, gen_chunk_size, m2svid_process_res],
+            inputs=[m2svid_config, m2svid_ckpt, disparity_perc, convergence_point, closing_kernel, mask_antialias, warping_batch_size, gen_chunk_size, m2svid_process_res],
             outputs=None,
         )
 
