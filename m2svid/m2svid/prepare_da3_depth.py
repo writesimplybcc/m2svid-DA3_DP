@@ -110,6 +110,11 @@ def run_da3_depth(
     depths = []
     total_batches = (len(frames) + batch_size - 1) // batch_size
     for idx, i in enumerate(tqdm(range(0, len(frames), batch_size), desc="DA3 depth inference")):
+        import sys
+        if getattr(sys.modules.get('__main__', None), 'GLOBAL_CANCEL', False):
+            sys.modules['__main__'].GLOBAL_CANCEL = False
+            raise RuntimeError("Stopped by user.")
+            
         if progress:
             try: progress(float(idx) / total_batches, desc=f"DA3 Depth Inference: batch {idx+1}/{total_batches}")
             except Exception: pass

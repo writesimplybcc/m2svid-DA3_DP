@@ -587,7 +587,12 @@ STATE = {
     "original_fps": 24.0,
     "original_hw": (720, 1280),
 }
+GLOBAL_CANCEL = False
 
+def trigger_cancel():
+    global GLOBAL_CANCEL
+    GLOBAL_CANCEL = True
+    return "Stopping gracefully... (please wait for current chunk to finish)"
 
 def get_gpu_info() -> str:
     if torch.cuda.is_available():
@@ -1138,6 +1143,10 @@ def step2_run_m2svid(
             chunk_outputs = []
             SF_LOG.info(f"Video has {T} frames, using chunking: {total_chunks} chunks (padded to {num_samples} frames each)")
             for idx in range(total_chunks):
+                global GLOBAL_CANCEL
+                if GLOBAL_CANCEL:
+                    GLOBAL_CANCEL = False
+                    raise RuntimeError("Stopped by user. VRAM flushed.")
                 s = idx * num_samples
                 e = min(s + num_samples, T)
                 chunk_len = e - s
@@ -1450,6 +1459,7 @@ def create_stereofaster_ui():
                             allow_custom_value=True,
                         )
                         step1_btn = gr.Button("⚡ Estimate Depth for Selected Video", variant="primary", size="lg")
+                        step1_stop_btn = gr.Button("🛑 STOP", variant="stop", size="sm")
                         step1_status = gr.Textbox(label="Estimation Progress", interactive=False)
                         depth_file = gr.File(label="Download Depth .npz", type="filepath")
 
@@ -1477,6 +1487,7 @@ def create_stereofaster_ui():
 
                     with gr.Column(scale=1):
                         step2_btn = gr.Button("🎬 Convert Selected to Stereo", variant="primary", size="lg")
+                        step2_stop_btn = gr.Button("🛑 STOP", variant="stop", size="sm")
                         step2_status = gr.Textbox(label="Stereography Progress", interactive=False)
 
                 with gr.Row():
@@ -1612,6 +1623,8 @@ def create_stereofaster_ui():
             ],
             outputs=[step2_status, out_right, out_sbs, out_anaglyph, out_dir_box],
         )
+        step1_stop_btn.click(fn=trigger_cancel, outputs=[step1_status])
+        step2_stop_btn.click(fn=trigger_cancel, outputs=[step2_status])
 
         # Batch buttons
         batch_depth_btn.click(
