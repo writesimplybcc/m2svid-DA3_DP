@@ -748,13 +748,15 @@ def step1_run_da3_depth(
         
         if is_depth_pro:
             depth = run_depth_pro_depth(frames, device=device)
-            # Depth Pro metric depth -> inverse depth (disparity) -> normalized to [0, 1]
+            # Depth Pro metric depth -> inverse depth (disparity) -> normalized to [0, 1] per-frame
             inv_depth = 1.0 / np.clip(depth, 1e-4, 1e5)
-            inv_min, inv_max = inv_depth.min(), inv_depth.max()
-            if inv_max - inv_min > 1e-6:
-                depth = (inv_depth - inv_min) / (inv_max - inv_min)
-            else:
-                depth = np.zeros_like(inv_depth)
+            for i in range(len(inv_depth)):
+                d_min, d_max = inv_depth[i].min(), inv_depth[i].max()
+                if d_max - d_min > 1e-6:
+                    inv_depth[i] = (inv_depth[i] - d_min) / (d_max - d_min)
+                else:
+                    inv_depth[i] = np.zeros_like(inv_depth[i])
+            depth = inv_depth
         else:
             depth = run_da3_depth(
                 frames,
@@ -765,12 +767,13 @@ def step1_run_da3_depth(
                 progress=progress,
             )
             depth = -depth
-            # Global temporal normalization for DA3 to prevent M2SVid shifting/jitter!
-            d_min, d_max = depth.min(), depth.max()
-            if d_max - d_min > 1e-6:
-                depth = (depth - d_min) / (d_max - d_min)
-            else:
-                depth = np.zeros_like(depth)
+            # Per-frame temporal normalization (StereoCrafter style) to completely destroy DA3's geometric jitter
+            for i in range(len(depth)):
+                d_min, d_max = depth[i].min(), depth[i].max()
+                if d_max - d_min > 1e-6:
+                    depth[i] = (depth[i] - d_min) / (d_max - d_min)
+                else:
+                    depth[i] = np.zeros_like(depth[i])
 
         if depth.shape[1:] != (h, w):
             depth = np.stack([cv2.resize(d, (w, h), cv2.INTER_CUBIC) for d in depth])
