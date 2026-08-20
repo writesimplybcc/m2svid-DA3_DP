@@ -21,41 +21,48 @@ import imageio
 import torch
 
 
+def to_pil(image):
+    image = Image.fromarray(image)
+    return image
+
+
+def make_anaglyph_image(left, right):
+    width, height = left.size
+    output_image = left.copy()
+    leftMap = output_image.load()
+    rightMap = right.load()
+    m = [ [ 1, 0, 0, 0, 0, 0, 0, 0, 0 ], [ 0, 0, 0, 0, 1, 0, 0, 0, 1 ] ]
+
+    for y in range(0, height):
+        for x in range(0, width):
+            r1, g1, b1 = leftMap[x, y]
+            r2, g2, b2 = rightMap[x, y]
+            leftMap[x, y] = (
+                int(r1*m[0][0] + g1*m[0][1] + b1*m[0][2] + r2*m[1][0] + g2*m[1][1] + b2*m[1][2]),
+                int(r1*m[0][3] + g1*m[0][4] + b1*m[0][5] + r2*m[1][3] + g2*m[1][4] + b2*m[1][5]),
+                int(r1*m[0][6] + g1*m[0][7] + b1*m[0][8] + r2*m[1][6] + g2*m[1][7] + b2*m[1][8])
+            )
+    return output_image
+
+
 def make_anaglyph_video(left_video, right_video, unnormalized_videos=False):
-    """
-    Fast, vectorized generation of Optimized Red/Cyan Anaglyph to prevent retinal rivalry
-    on highly saturated colors (e.g. pure red or pure blue objects).
-    """
     if unnormalized_videos:
         device = left_video.device
-        # Convert [-1, 1] tensor to [0, 255] numpy [T, H, W, C]
-        left_np = left_video.cpu().numpy().transpose(1, 2, 3, 0)
-        right_np = right_video.cpu().numpy().transpose(1, 2, 3, 0)
-        left_np = (((left_np + 1) / 2).clip(0, 1) * 255).astype(np.float32)
-        right_np = (((right_np + 1) / 2).clip(0, 1) * 255).astype(np.float32)
-    else:
-        left_np = np.array(left_video, dtype=np.float32)
-        right_np = np.array(right_video, dtype=np.float32)
-        
-    # Optimized Anaglyph formula to reduce retinal rivalry:
-    # Left Eye (Red) = Luminance of Left View
-    # Right Eye (Cyan) = Green and Blue of Right View
-    
-    r1, g1, b1 = left_np[..., 0], left_np[..., 1], left_np[..., 2]
-    r2, g2, b2 = right_np[..., 0], right_np[..., 1], right_np[..., 2]
-    
-    # Calculate luminance for the left view (Red channel output)
-    out_r = (0.299 * r1 + 0.587 * g1 + 0.114 * b1).clip(0, 255)
-    
-    # Keep right view colors for the right eye (Green/Blue channels output)
-    out_g = g2
-    out_b = b2
-    
-    output_frames = np.stack([out_r, out_g, out_b], axis=-1)
+        left_video = left_video.cpu().numpy().transpose(1, 2, 3, 0)
+        right_video = right_video.cpu().numpy().transpose(1, 2, 3, 0)
+        left_video = (((left_video + 1) / 2).clip(0, 1) * 255).astype(np.uint8)
+        right_video = (((right_video + 1) / 2).clip(0, 1) * 255).astype(np.uint8)
+
+    output_frames = []
+    for left_image, right_image in zip(left_video, right_video):
+        left_image = to_pil(left_image)
+        right_image = to_pil(right_image)
+        output_image = make_anaglyph_image(left_image, right_image)
+        output_frames.append(output_image)
+    output_frames = np.stack(output_frames, axis=0)
 
     if unnormalized_videos:
-        # Scale back to [-1, 1]
-        output_frames = (output_frames / 255.0) * 2.0 - 1.0
+        output_frames = ((output_frames.astype(np.float32) / 255.0) - 0.5) / 0.5
         output_frames = torch.from_numpy(output_frames.transpose(3, 0, 1, 2)).to(device)
 
     return output_frames
