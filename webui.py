@@ -1257,16 +1257,18 @@ def step2_run_m2svid(
         # Restore the perfectly sharp original left eye
         input_video = original_input_video
         
-        # We MUST use the hacky M2SVid edge crop!
-        # M2SVid's UNet was never trained to inpaint holes on the left edge of the screen.
-        # If we use a mathematical Convergence Point during warping, the background shifts right,
-        # tearing open the left border, and the UNet hallucinates jagged garbage.
-        # So we MUST keep convergence=0.0 during generation, and then manually crop here
-        # to artificially create the convergence shift at the very end!
-        crop_pixels = int(tw * disparity_perc)
-        if crop_pixels > 0:
-            input_video = input_video[:, :, :, :-crop_pixels]
-            final_generated = final_generated[:, :, :, crop_pixels:]
+        # Mathematical Convergence Point (Zero Parallax) Shift
+        # Since warping.py uses convergence=0.0 to prevent UNet tearing on the left border,
+        # the foreground pops OUT of the screen (negative parallax), and the background is at the screen plane.
+        # To shift the scene INTO the screen based on convergence_point (e.g. 0.5), we must globally shift 
+        # the Right Eye to the RIGHT relative to the Left Eye.
+        # We do this by cropping the LEFT edge of the Left Eye (shifting it left) and the RIGHT edge of the Right Eye.
+        shift = int(tw * disparity_perc * convergence_point)
+        if shift > 0:
+            # Left Eye shifts LEFT by `shift` (drops left edge). Right Eye stays anchored (drops right edge).
+            # This causes the Right Eye to be `shift` pixels further RIGHT relative to the Left Eye!
+            input_video = input_video[:, :, :, shift:]
+            final_generated = final_generated[:, :, :, :-shift]
             
         # Ensure outputs are padded back to 16:9 standard resolution for hardware compatibility
         c, t, h, w = final_generated.shape
