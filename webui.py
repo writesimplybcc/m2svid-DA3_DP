@@ -709,18 +709,23 @@ def clear_cuda():
 def step1_run_depthcrafter(video_path: str, process_res: int, guidance_scale: float, inference_steps: int, window_size: int, overlap: int, progress=gr.Progress(track_tqdm=True)) -> Tuple[str, str, str]:
     if not video_path:
         return "No video selected.", "", ""
-    stem = Path(video_path).stem
+    
+    vp = SOURCE_DIR / (video_path if "." in video_path else f"{video_path}.mp4")
+    if not vp.exists():
+        return f"File not found: {vp}", "", ""
+        
+    stem = vp.stem
     out_npz = DEPTH_DIR / f"{stem}_DC_depth.npz"
     out_mp4 = DEPTH_DIR / f"{stem}_DC_depth.mp4"
     
     try:
         from m2svid.prepare_depthcrafter import run_depthcrafter_depth
         import cv2
-        cap = cv2.VideoCapture(video_path)
+        cap = cv2.VideoCapture(str(vp))
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps <= 0: fps = 30.0
         cap.release()
-        depth = run_depthcrafter_depth(video_path, process_res=process_res, guidance_scale=guidance_scale, num_inference_steps=inference_steps, window_size=window_size, overlap=overlap, progress=progress)
+        depth = run_depthcrafter_depth(str(vp), process_res=process_res, guidance_scale=guidance_scale, num_inference_steps=inference_steps, window_size=window_size, overlap=overlap, progress=progress)
         
         save_m2svid_compatible_npz(depth, str(out_npz))
         _create_depth_preview_video(depth, str(out_mp4), fps)
