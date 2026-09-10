@@ -715,8 +715,11 @@ def step1_run_depthcrafter(video_path: str, process_res: int, guidance_scale: fl
     
     try:
         from m2svid.prepare_depthcrafter import run_depthcrafter_depth
-        from m2svid.utils.video_utils import get_video_fps
-        fps = get_video_fps(video_path) or 30.0
+        import cv2
+        cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps <= 0: fps = 30.0
+        cap.release()
         depth = run_depthcrafter_depth(video_path, process_res=process_res, guidance_scale=guidance_scale, num_inference_steps=inference_steps, window_size=window_size, overlap=overlap, progress=progress)
         
         save_m2svid_compatible_npz(depth, str(out_npz))
