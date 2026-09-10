@@ -981,8 +981,7 @@ def step2_run_m2svid(
     if not progress_prefix:
         progress_prefix = f"[{stem}] "
         
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
-    out_dir = FINAL_DIR / f"{stem}_stereo_{timestamp}"
+    out_dir = FINAL_DIR / f"{stem}_stereo"
     out_dir.mkdir(parents=True, exist_ok=True)
     
     reprojected_dir = out_dir / "reprojected"
