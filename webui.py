@@ -333,6 +333,7 @@ def run_depth_on_source_videos(progress=gr.Progress(track_tqdm=True), model_name
             SF_LOG.debug(f"Loaded {len(frames)} frames @ {fps}fps, size {w}x{h}")
             
             is_depth_pro = "DepthPro" in model_name or "depth-pro" in model_name
+            is_depthcrafter = "DepthCrafter" in model_name
             device = "cuda" if torch.cuda.is_available() else "cpu"
             
             if is_depth_pro:
@@ -343,6 +344,14 @@ def run_depth_on_source_videos(progress=gr.Progress(track_tqdm=True), model_name
                     depth = (inv_depth - inv_min) / (inv_max - inv_min)
                 else:
                     depth = np.zeros_like(inv_depth)
+            elif is_depthcrafter:
+                from m2svid.prepare_depthcrafter import run_depthcrafter_depth
+                depth = run_depthcrafter_depth(str(vp), process_res=process_res, progress=progress)
+                # DepthCrafter is ALREADY temporally consistent and returns [0,1] normalized.
+                # However, M2SVid expects `high value = near`. 
+                # Does DepthCrafter return high=near or high=far?
+                # Usually depth models return close=bright. 
+                # Let's assume close=bright (high=near), same as Depth Pro.
             else:
                 depth = run_da3_depth(frames, model_name=model_name, process_res=process_res, device=device, batch_size=batch_size, progress=progress)
                 depth = -depth
@@ -530,7 +539,7 @@ def _load_warping_module():
 # Recommended defaults for StereoFaster (DA3 + M2SVid) use case:
 # - DA3NESTED-GIANT-LARGE-1.1 : Best overall quality (official preferred -1.1 retrained version)
 # - DA3MONO-LARGE             : Excellent pure relative monocular depth (often best for warping accuracy)
-DEFAULT_DA3_MODEL = "depth-anything/DA3NESTED-GIANT-LARGE-1.1"
+# Default model is now defined below models list
 def _is_fast_gpu(gpu_name: str) -> bool:
     n = gpu_name.lower()
     markers = (
@@ -612,7 +621,10 @@ def get_source_video_list():
     return vids
 
 
+DEFAULT_DA3_MODEL = "tencent/DepthCrafter"
+
 MODEL_SUFFIX_MAP = {
+    "tencent/DepthCrafter": "_DC",
     "depth-anything/DA3NESTED-GIANT-LARGE-1.1": "_NGL",
     "depth-anything/DA3MONO-LARGE": "_ML",
     "depth-anything/DA3-GIANT-1.1": "_G",
@@ -694,6 +706,31 @@ def clear_cuda():
 # STEP 1: DA3 Depth Estimation
 # =============================================================================
 
+def step1_run_depthcrafter(video_path: str, process_res: int, guidance_scale: float, inference_steps: int, window_size: int, overlap: int, progress=gr.Progress(track_tqdm=True)) -> Tuple[str, str, str]:
+    if not video_path:
+        return "No video selected.", "", ""
+    stem = Path(video_path).stem
+    out_npz = DEPTH_DIR / f"{stem}_DC_depth.npz"
+    out_mp4 = DEPTH_DIR / f"{stem}_DC_depth.mp4"
+    
+    try:
+        from m2svid.prepare_depthcrafter import run_depthcrafter_depth
+        from m2svid.utils.video_utils import get_video_fps
+        fps = get_video_fps(video_path) or 30.0
+        depth = run_depthcrafter_depth(video_path, process_res=process_res, guidance_scale=guidance_scale, num_inference_steps=inference_steps, window_size=window_size, overlap=overlap, progress=progress)
+        
+        save_m2svid_compatible_npz(depth, str(out_npz))
+        _create_depth_preview_video(depth, str(out_mp4), fps)
+        
+        from m2svid.prepare_depthcrafter import unload_depthcrafter_model
+        unload_depthcrafter_model()
+        return "DepthCrafter estimation complete!", str(out_mp4), str(out_npz)
+    except Exception as e:
+        SF_LOG.error(f"DepthCrafter error: {e}")
+        import traceback
+        traceback.print_exc()
+        return f"Error: {e}", "", ""
+
 def step1_run_da3_depth(
     input_video: str,
     model_name: str,
@@ -746,6 +783,9 @@ def step1_run_da3_depth(
         SF_LOG.info(f"Running {model_type_str} inference...")
         device = "cuda" if torch.cuda.is_available() else "cpu"
         
+        is_depth_pro = "DepthPro" in model_name or "depth-pro" in model_name
+        is_depthcrafter = "DepthCrafter" in model_name
+        
         if is_depth_pro:
             depth = run_depth_pro_depth(frames, device=device)
             # Depth Pro metric depth -> inverse depth (disparity) -> normalized to [0, 1] per-frame
@@ -757,6 +797,11 @@ def step1_run_da3_depth(
                 else:
                     inv_depth[i] = np.zeros_like(inv_depth[i])
             depth = inv_depth
+        elif is_depthcrafter:
+            from m2svid.prepare_depthcrafter import run_depthcrafter_depth
+            depth = run_depthcrafter_depth(video_path, process_res=process_res, progress=progress)
+            # DepthCrafter is perfectly temporally consistent! DO NOT per-frame normalize it!
+            # It already outputs [0,1] global normalized disparities. 
         else:
             depth = run_da3_depth(
                 frames,
@@ -1431,38 +1476,30 @@ def create_stereofaster_ui():
                             format="mp4"
                         )
 
-            # ===================== STEP 1 =====================
-            with gr.Tab("🚀 Step 1 — Depth Estimation"):
-                gr.Markdown("#### Compute depth using Depth Anything 3 or Apple Depth Pro.")
+            # ===================== STEP 1 (NEW DEPTHCRAFTER) =====================
+            with gr.Tab("🚀 Step 1 — DepthCrafter Estimation"):
+                gr.Markdown("#### Compute temporally consistent video depth using DepthCrafter.")
                 with gr.Row():
                     with gr.Column(scale=2):
-                        da3_model = gr.Dropdown(
-                            choices=[
-                                "depth-anything/DA3NESTED-GIANT-LARGE-1.1",
-                                "depth-anything/DA3MONO-LARGE",
-                                "depth-anything/DA3-GIANT-1.1",
-                                "depth-anything/DA3-LARGE-1.1",
-                                "depth-anything/DA3METRIC-LARGE",
-                                "apple/DepthPro",
-                            ],
-                            value=DEFAULT_DA3_MODEL,
-                            label="Depth Estimation Model",
-                        )
-                        process_res = gr.Slider(384, 1024, value=720, step=32, label="DA3 Resolution")
-                        batch_size = gr.Slider(1, 32, value=_VRAM_DEFAULTS["da3"], step=1, label="DA3 Batch Size")
-                        batch_depth_btn = gr.Button("📦 Run Batch Depth Processing on All Source Videos", variant="secondary")
+                        dc_guidance_scale = gr.Slider(0.1, 10.0, value=1.0, step=0.1, label="Guidance Scale")
+                        dc_inference_steps = gr.Slider(1, 50, value=5, step=1, label="Inference Steps (Default 5 for speed)")
+                        dc_window_size = gr.Slider(10, 200, value=110, step=1, label="Window Size")
+                        dc_overlap = gr.Slider(0, 100, value=25, step=1, label="Overlap")
+                        dc_max_res = gr.Slider(256, 720, value=720, step=8, label="Max Resolution (Capped at 720p for M2SVid)")
+                        
+                        dc_batch_depth_btn = gr.Button("📦 Run Batch Depth Processing on All Source Videos", variant="secondary")
                     with gr.Column(scale=1):
-                        step1_dropdown = gr.Dropdown(
+                        dc_step1_dropdown = gr.Dropdown(
                             choices=[""] + get_source_video_list(),
                             value="",
                             label="Select Source Video",
                             interactive=True,
                             allow_custom_value=True,
                         )
-                        step1_btn = gr.Button("⚡ Estimate Depth for Selected Video", variant="primary", size="lg")
-                        step1_stop_btn = gr.Button("🛑 STOP", variant="stop", size="sm")
-                        step1_status = gr.Textbox(label="Estimation Progress", interactive=False)
-                        depth_file = gr.File(label="Download Depth .npz", type="filepath")
+                        dc_step1_btn = gr.Button("⚡ Estimate Depth for Selected Video", variant="primary", size="lg")
+                        dc_step1_stop_btn = gr.Button("🛑 STOP", variant="stop", size="sm")
+                        dc_step1_status = gr.Textbox(label="Estimation Progress", interactive=False)
+                        dc_depth_file = gr.File(label="Download Depth .npz", type="filepath")
 
             # ===================== STEP 2 =====================
             with gr.Tab("🎬 Step 2 — M2SVid Stereography"):
@@ -1487,16 +1524,47 @@ def create_stereofaster_ui():
                         )
 
                     with gr.Column(scale=1):
-                        step2_btn = gr.Button("🎬 Convert Selected to Stereo", variant="primary", size="lg")
+                        step2_btn = gr.Button("💫 Convert Selected to Stereo 3D", variant="primary", size="lg")
                         step2_stop_btn = gr.Button("🛑 STOP", variant="stop", size="sm")
-                        step2_status = gr.Textbox(label="Stereography Progress", interactive=False)
+                        step2_status = gr.Textbox(label="M2SVid Progress", interactive=False)
+                        
+                        out_right = gr.Video(label="Generated Right Eye", interactive=False, format="mp4")
+                        out_sbs = gr.Video(label="Final Stereo SBS", interactive=False, format="mp4")
+                        out_anaglyph = gr.Video(label="Final Anaglyph Red/Cyan", interactive=False, format="mp4")
 
+            # ===================== TAB 3 (OLD DEPTH) =====================
+            with gr.Tab("🛠️ Tab 3 — Other Depth Estimation Models"):
+                gr.Markdown("#### Compute depth using Depth Anything 3 or Apple Depth Pro (Legacy).")
                 with gr.Row():
-                    out_right = gr.Video(label="Generated Right View")
-                    out_sbs = gr.Video(label="Side-by-Side (SBS)")
-                    out_anaglyph = gr.Video(label="Anaglyph 3D")
-                    
-                out_dir_box = gr.Textbox(label="Output Directory (all files)", interactive=False)
+                    with gr.Column(scale=2):
+                        da3_model = gr.Dropdown(
+                            choices=[
+                                "depth-anything/DA3NESTED-GIANT-LARGE-1.1",
+                                "depth-anything/DA3MONO-LARGE",
+                                "depth-anything/DA3-GIANT-1.1",
+                                "depth-anything/DA3-LARGE-1.1",
+                                "depth-anything/DA3METRIC-LARGE",
+                                "apple/DepthPro",
+                            ],
+                            value="depth-anything/DA3NESTED-GIANT-LARGE-1.1",
+                            label="Depth Estimation Model",
+                        )
+                        process_res = gr.Slider(384, 1024, value=720, step=32, label="DA3 Resolution")
+                        batch_size = gr.Slider(1, 32, value=_VRAM_DEFAULTS["da3"], step=1, label="DA3 Batch Size")
+                        batch_depth_btn = gr.Button("📦 Run Batch Depth Processing on All Source Videos", variant="secondary")
+                    with gr.Column(scale=1):
+                        step1_dropdown = gr.Dropdown(
+                            choices=[""] + get_source_video_list(),
+                            value="",
+                            label="Select Source Video",
+                            interactive=True,
+                            allow_custom_value=True,
+                        )
+                        step1_btn = gr.Button("⚡ Estimate Depth for Selected Video", variant="primary", size="lg")
+                        step1_stop_btn = gr.Button("🛑 STOP", variant="stop", size="sm")
+                        step1_status = gr.Textbox(label="Estimation Progress", interactive=False)
+                        depth_file = gr.File(label="Download Depth .npz", type="filepath")
+                        out_dir_box = gr.Textbox(label="Output Directory (all files)", interactive=False)
 
         # In-memory depth tracking
         depth_input = gr.File(value=default_depth_npz, visible=False)
@@ -1586,7 +1654,14 @@ def create_stereofaster_ui():
             outputs=[preview_video, preview_depth, depth_input, depth_state, crop_preset, crop_res, crop_preview_state],
         )
 
-        # Wire step 1
+        # Wire step 1 (DepthCrafter)
+        dc_step1_btn.click(
+            fn=step1_run_depthcrafter,
+            inputs=[dc_step1_dropdown, dc_max_res, dc_guidance_scale, dc_inference_steps, dc_window_size, dc_overlap],
+            outputs=[dc_step1_status, preview_depth, dc_depth_file],
+        )
+
+        # Wire step 1 (Old DA3)
         step1_btn.click(
             fn=step1_run_da3_depth,
             inputs=[step1_dropdown, da3_model, process_res, batch_size],
@@ -1624,10 +1699,16 @@ def create_stereofaster_ui():
             ],
             outputs=[step2_status, out_right, out_sbs, out_anaglyph, out_dir_box],
         )
+        dc_step1_stop_btn.click(fn=trigger_cancel, outputs=[dc_step1_status])
         step1_stop_btn.click(fn=trigger_cancel, outputs=[step1_status])
         step2_stop_btn.click(fn=trigger_cancel, outputs=[step2_status])
 
         # Batch buttons
+        dc_batch_depth_btn.click(
+            fn=run_depth_on_source_videos,
+            inputs=[gr.Textbox(value="tencent/DepthCrafter", visible=False), dc_max_res, gr.Slider(value=1, visible=False)],
+            outputs=[dc_batch_depth_btn, source_dropdown, depth_dropdown, dc_step1_dropdown],
+        )
         batch_depth_btn.click(
             fn=run_depth_on_source_videos,
             inputs=[da3_model, process_res, batch_size],
@@ -1646,13 +1727,14 @@ def create_stereofaster_ui():
             return (
                 gr.update(choices=[""] + src),
                 gr.update(choices=[""] + dep),
+                gr.update(choices=[""] + src),
                 gr.update(choices=[""] + src)
             )
             
         refresh_btn.click(
             fn=_refresh_hub,
             inputs=[],
-            outputs=[source_dropdown, depth_dropdown, step1_dropdown],
+            outputs=[source_dropdown, depth_dropdown, step1_dropdown, dc_step1_dropdown],
         )
         
         # Wire depth dropdown to update preview
