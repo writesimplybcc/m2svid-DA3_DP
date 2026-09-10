@@ -1063,7 +1063,7 @@ def step2_run_m2svid(
             output_path_mask=str(reprojected_mask),
             disparity_perc=disparity_perc,
             batch_size=warping_batch_size,
-            convergence_point=convergence_point,
+            convergence_point=0.0, # MUST BE 0.0 TO PREVENT UNET GLITCHES!
         )
         SF_LOG.info("Geometric warping complete")
 
@@ -1257,13 +1257,36 @@ def step2_run_m2svid(
         # Restore the perfectly sharp original left eye
         input_video = original_input_video
         
-        # Removed the hacky M2SVid edge crop!
-        # Because we injected a mathematically correct Convergence Point (Zero Parallax) 
-        # directly into warping.py, doing this manual crop would double-shift the video 
-        # out of bounds and completely destroy the 3D effect!
+        # We MUST use the hacky M2SVid edge crop!
+        # M2SVid's UNet was never trained to inpaint holes on the left edge of the screen.
+        # If we use a mathematical Convergence Point during warping, the background shifts right,
+        # tearing open the left border, and the UNet hallucinates jagged garbage.
+        # So we MUST keep convergence=0.0 during generation, and then manually crop here
+        # to artificially create the convergence shift at the very end!
+        crop_pixels = int(tw * disparity_perc)
+        if crop_pixels > 0:
+            input_video = input_video[:, :, :, :-crop_pixels]
+            final_generated = final_generated[:, :, :, crop_pixels:]
             
-        padded_input = input_video
-        padded_final = final_generated
+        # Ensure outputs are padded back to 16:9 standard resolution for hardware compatibility
+        c, t, h, w = final_generated.shape
+        target_h, target_w = h, w
+        if w < int(h * 16 / 9):  # Pillarbox, pad width
+            target_w = int(h * 16 / 9)
+            target_w = target_w - (target_w % 8)
+        elif h < int(w * 9 / 16):  # Letterbox, pad height
+            target_h = int(w * 9 / 16)
+            target_h = target_h - (target_h % 8)
+            
+        pad_top = (target_h - h) // 2
+        pad_bottom = target_h - h - pad_top
+        pad_left = (target_w - w) // 2
+        pad_right = target_w - w - pad_left
+        
+        padded_input = torch.nn.functional.pad(input_video, (pad_left, pad_right, pad_top, pad_bottom), value=-1.0)
+        padded_final = torch.nn.functional.pad(final_generated, (pad_left, pad_right, pad_top, pad_bottom), value=-1.0)
+        
+        SF_LOG.info(f"Padded output from {w}x{h} to 16:9 standard ({target_w}x{target_h})")
 
         generated_right = out_dir / "generated_right.mp4"
         sbs = out_dir / "stereo_sbs.mp4"
