@@ -45,6 +45,12 @@ def run_depthcrafter_depth(video_path: str, process_res: int, guidance_scale: fl
         raise RuntimeError("Stopped by user.")
         
     print(f"[DepthCrafter] Running inference on {len(frames)} frames...")
+    
+    def on_step_end(pipeline, step: int, timestep: int, callback_kwargs: dict):
+        if (step + 1) % 5 == 0 or (step + 1) == num_inference_steps:
+            print(f"[DepthCrafter] Denoising step {step + 1}/{num_inference_steps} ...")
+        return callback_kwargs
+
     with torch.inference_mode():
         res = model.pipe(
             frames,
@@ -56,6 +62,7 @@ def run_depthcrafter_depth(video_path: str, process_res: int, guidance_scale: fl
             window_size=window_size,
             overlap=overlap,
             track_time=False,
+            callback_on_step_end=on_step_end,
         ).frames[0]
         
     res = res.sum(-1) / res.shape[-1]

@@ -1182,6 +1182,8 @@ def step2_run_m2svid(
                 "motion_bucket_id": torch.tensor([127]).cuda(),
             }
             SF_LOG.info("Starting single-chunk generation")
+            print(f"\n[M2SVid] ⏳ Executing heavy AI video generation for {T} frames...")
+            print(f"[M2SVid] ⏳ Please wait. This can take anywhere from 15s to 90s depending on your GPU...")
             t0 = time.time()
             clear_cuda()
             try:
@@ -1192,6 +1194,7 @@ def step2_run_m2svid(
             with torch.inference_mode():
                 final_generated = model.generate(input_batch)["generated-video"][0].cpu()
             t1 = time.time()
+            print(f"[M2SVid] ✅ Generation finished in {t1 - t0:.1f} seconds!")
             SF_LOG.info(f"Single-chunk generation complete in {t1 - t0:.1f}s")
         else:
             total_chunks = (T + num_samples - 1) // num_samples
@@ -1226,6 +1229,7 @@ def step2_run_m2svid(
                     "motion_bucket_id": torch.tensor([127]).cuda(),
                 }
                 t0 = time.time()
+                print(f"\n[M2SVid] ⏳ Executing heavy AI generation for Chunk {idx+1}/{total_chunks}... Please wait.")
                 try:
                     if progress:
                         progress(0.55 + 0.30 * (idx / total_chunks), desc=f"{progress_prefix}Generating chunk {idx+1}/{total_chunks}...")
@@ -1235,6 +1239,7 @@ def step2_run_m2svid(
                     gen_chunk = model.generate(input_batch)["generated-video"][0].cpu()
                 t1 = time.time()
                 sys.stdout.flush()
+                print(f"[M2SVid] ✅ Chunk {idx+1}/{total_chunks} finished in {t1 - t0:.1f} seconds!")
                 SF_LOG.info(f"Chunk {idx+1}/{total_chunks} done in {t1 - t0:.1f}s")
                 if pad_len > 0:
                     gen_chunk = gen_chunk[:, :chunk_len, :, :]
