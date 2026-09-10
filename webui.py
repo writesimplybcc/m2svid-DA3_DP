@@ -1485,7 +1485,7 @@ def create_stereofaster_ui():
                         dc_inference_steps = gr.Slider(1, 50, value=5, step=1, label="Inference Steps (Default 5 for speed)")
                         dc_window_size = gr.Slider(10, 200, value=110, step=1, label="Window Size")
                         dc_overlap = gr.Slider(0, 100, value=25, step=1, label="Overlap")
-                        dc_max_res = gr.Slider(256, 720, value=720, step=8, label="Max Resolution (Capped at 720p for M2SVid)")
+                        dc_max_res = gr.Slider(256, 1536, value=1024, step=64, label="Max Resolution (Longest Edge)", info="This caps the longest side of the video (e.g. 1024 means 1024x576). Warning: Going above 1024 may crash 12GB cards!")
                         
                         dc_batch_depth_btn = gr.Button("📦 Run Batch Depth Processing on All Source Videos", variant="secondary")
                     with gr.Column(scale=1):
