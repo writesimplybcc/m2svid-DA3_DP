@@ -1262,25 +1262,8 @@ def step2_run_m2svid(
         # directly into warping.py, doing this manual crop would double-shift the video 
         # out of bounds and completely destroy the 3D effect!
             
-        # Ensure outputs are padded back to 16:9 standard resolution for hardware compatibility
-        c, t, h, w = final_generated.shape
-        target_h, target_w = h, w
-        if w < int(h * 16 / 9):  # Pillarbox, pad width
-            target_w = int(h * 16 / 9)
-            target_w = target_w - (target_w % 8)
-        elif h < int(w * 9 / 16):  # Letterbox, pad height
-            target_h = int(w * 9 / 16)
-            target_h = target_h - (target_h % 8)
-            
-        pad_top = (target_h - h) // 2
-        pad_bottom = target_h - h - pad_top
-        pad_left = (target_w - w) // 2
-        pad_right = target_w - w - pad_left
-        
-        padded_input = torch.nn.functional.pad(input_video, (pad_left, pad_right, pad_top, pad_bottom), value=-1.0)
-        padded_final = torch.nn.functional.pad(final_generated, (pad_left, pad_right, pad_top, pad_bottom), value=-1.0)
-        
-        SF_LOG.info(f"Padded output from {w}x{h} to 16:9 standard ({target_w}x{target_h})")
+        padded_input = input_video
+        padded_final = final_generated
 
         generated_right = out_dir / "generated_right.mp4"
         sbs = out_dir / "stereo_sbs.mp4"
