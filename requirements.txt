@@ -56,7 +56,8 @@ transformers                # Often pulled by conditioning modules in Hi3D/sgm
 open-clip-torch==2.29.0     # Required by sgm (Hi3D-Official) for text conditioning in M2SVid
 pytorch-msssim>=0.2.1       # Used in m2svid_model.py for MS-SSIM metric during generation
 av                          # Required by torchvision.io.write_video for video exports
-# decord                    # Optional but useful for faster video decoding
+decord                      # Required by DepthCrafter for fast video decoding
+diffusers                   # Required by DepthCrafter for model execution
 
 
 # =============================================================================

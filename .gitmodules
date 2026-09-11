@@ -1,0 +1,3 @@
+[submodule "m2svid/third_party/DepthCrafter"]
+	path = m2svid/third_party/DepthCrafter
+	url = https://github.com/Tencent/DepthCrafter.git
