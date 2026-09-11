@@ -21,10 +21,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY start-with-filebrowser.sh .
 COPY entrypoint.sh .
 
-# Your WEBUI dependency folders
+# Your WEBUI dependency folders and documentation
 COPY Depth-Anything-3/ ./Depth-Anything-3/
 COPY m2svid/ ./m2svid/
 COPY hi3D/ ./hi3D/
+COPY docs/ ./docs/
 
 # Create necessary I/O folders
 RUN mkdir -p source_videos depthmaps_videos final_videos scratch ckpts checkpoints
