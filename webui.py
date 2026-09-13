@@ -1246,32 +1246,47 @@ def step2_run_m2svid(
                 chunk_outputs.append(gen_chunk)
                 clear_cuda()
             final_generated = torch.cat(chunk_outputs, dim=1)
+            del chunk_outputs
 
-        final_generated = torch.nn.functional.interpolate(
-            final_generated, size=orig_shape, mode="bilinear", align_corners=False
-        )
+        # Chunked blending and upsampling in small batches (16 frames)
+        # to completely eliminate the 21GB/42GB contiguous CPU RAM allocation crash!
+        T_total = input_video.shape[1]
+        shift = int(tw * disparity_perc * convergence_point)
         
-        # Blend the AI hallucinated pixels ONLY into the masked holes of the razor-sharp original reprojection
-        final_generated = original_reprojected * (1.0 - original_mask) + final_generated * original_mask
+        final_uint8_frames = []
+        orig_left_uint8 = []
         
-        # Restore the perfectly sharp original left eye
-        input_video = original_input_video
+        for i in range(0, T_total, 16):
+            i_end = min(i + 16, T_total)
+            fg_sub = final_generated[:, i:i_end]
+            if fg_sub.shape[-2:] != orig_shape:
+                fg_sub = torch.nn.functional.interpolate(fg_sub, size=orig_shape, mode="bilinear", align_corners=False)
+            
+            rep_sub = original_reprojected[:, i:i_end]
+            mask_sub = original_mask[:, i:i_end]
+            
+            # Blend hallucinated pixels ONLY into disocclusion holes
+            blended = rep_sub * (1.0 - mask_sub) + fg_sub * mask_sub
+            
+            # Convert directly to uint8 [0, 255]
+            blended_u8 = (((blended + 1.0) / 2.0).clamp(0, 1) * 255.0).to(torch.uint8)
+            left_u8 = (((original_input_video[:, i:i_end] + 1.0) / 2.0).clamp(0, 1) * 255.0).to(torch.uint8)
+            
+            final_uint8_frames.append(blended_u8)
+            orig_left_uint8.append(left_u8)
+            
+        del final_generated, original_reprojected, original_mask, original_input_video
+        right_video_u8 = torch.cat(final_uint8_frames, dim=1) # [C, T, H, W] in uint8
+        left_video_u8 = torch.cat(orig_left_uint8, dim=1)
+        del final_uint8_frames, orig_left_uint8
         
         # Mathematical Convergence Point (Zero Parallax) Shift
-        # Since warping.py uses convergence=0.0 to prevent UNet tearing on the left border,
-        # the foreground pops OUT of the screen (negative parallax), and the background is at the screen plane.
-        # To shift the scene INTO the screen based on convergence_point (e.g. 0.5), we must globally shift 
-        # the Right Eye to the RIGHT relative to the Left Eye.
-        # We do this by cropping the LEFT edge of the Left Eye (shifting it left) and the RIGHT edge of the Right Eye.
-        shift = int(tw * disparity_perc * convergence_point)
         if shift > 0:
-            # Left Eye shifts LEFT by `shift` (drops left edge). Right Eye stays anchored (drops right edge).
-            # This causes the Right Eye to be `shift` pixels further RIGHT relative to the Left Eye!
-            input_video = input_video[:, :, :, shift:]
-            final_generated = final_generated[:, :, :, :-shift]
+            left_video_u8 = left_video_u8[:, :, :, shift:]
+            right_video_u8 = right_video_u8[:, :, :, :-shift]
             
         # Ensure outputs are padded back to 16:9 standard resolution for hardware compatibility
-        c, t, h, w = final_generated.shape
+        c, t, h, w = right_video_u8.shape
         target_h, target_w = h, w
         if w < int(h * 16 / 9):  # Pillarbox, pad width
             target_w = int(h * 16 / 9)
@@ -1285,8 +1300,9 @@ def step2_run_m2svid(
         pad_left = (target_w - w) // 2
         pad_right = target_w - w - pad_left
         
-        padded_input = torch.nn.functional.pad(input_video, (pad_left, pad_right, pad_top, pad_bottom), value=-1.0)
-        padded_final = torch.nn.functional.pad(final_generated, (pad_left, pad_right, pad_top, pad_bottom), value=-1.0)
+        padded_left = torch.nn.functional.pad(left_video_u8, (pad_left, pad_right, pad_top, pad_bottom), value=0)
+        padded_right = torch.nn.functional.pad(right_video_u8, (pad_left, pad_right, pad_top, pad_bottom), value=0)
+        del left_video_u8, right_video_u8
         
         SF_LOG.info(f"Padded output from {w}x{h} to 16:9 standard ({target_w}x{target_h})")
 
@@ -1294,24 +1310,63 @@ def step2_run_m2svid(
         sbs = out_dir / "stereo_sbs.mp4"
         anaglyph = out_dir / "anaglyph.mp4"
 
-        _save_video(padded_final[None], fps, str(generated_right))
-        sbs_tensor = torch.cat([padded_input, padded_final], dim=-1)
-        _save_video(sbs_tensor[None], fps, str(sbs))
-
-        try:
-            anaglyph_tensor = make_anaglyph_video(padded_input, padded_final, unnormalized_videos=True)
-        except Exception as e:
-            SF_LOG.error(f"Anaglyph generation failed (non-fatal): {e}")
-            anaglyph_tensor = None
-
-        if anaglyph_tensor is not None:
-            try:
-                _save_video(anaglyph_tensor[None], fps, str(anaglyph))
-            except Exception as e:
-                SF_LOG.error(f"Anaglyph save failed: {e}")
-                anaglyph = None
-        else:
-            anaglyph = None
+        # Stream write right, SBS, and red/cyan anaglyph videos in a single unified pass
+        import cv2
+        import numpy as np
+        
+        fourcc_candidates = [
+            cv2.VideoWriter_fourcc(*"avc1"),
+            cv2.VideoWriter_fourcc(*"X264"),
+            cv2.VideoWriter_fourcc(*"H264"),
+            cv2.VideoWriter_fourcc(*"mp4v"),
+        ]
+        
+        T_val = padded_left.shape[1]
+        out_H = padded_left.shape[2]
+        out_W = padded_left.shape[3]
+        
+        w_right, w_sbs, w_ana = None, None, None
+        for fourcc in fourcc_candidates:
+            w_right = cv2.VideoWriter(str(generated_right), fourcc, float(fps), (out_W, out_H), isColor=True)
+            w_sbs = cv2.VideoWriter(str(sbs), fourcc, float(fps), (out_W * 2, out_H), isColor=True)
+            w_ana = cv2.VideoWriter(str(anaglyph), fourcc, float(fps), (out_W, out_H), isColor=True)
+            if w_right.isOpened() and w_sbs.isOpened() and w_ana.isOpened():
+                break
+            for w_obj in (w_right, w_sbs, w_ana):
+                if w_obj: w_obj.release()
+            w_right, w_sbs, w_ana = None, None, None
+            
+        if not w_right:
+            raise RuntimeError("Failed to open VideoWriters for stereo output.")
+            
+        SF_LOG.info(f"Streaming {T_val} frames @ {out_W}x{out_H} into stereo video files...")
+        
+        for i in range(T_val):
+            left_f = padded_left[:, i, :, :].cpu().numpy().transpose(1, 2, 0)
+            right_f = padded_right[:, i, :, :].cpu().numpy().transpose(1, 2, 0)
+            
+            left_bgr = cv2.cvtColor(left_f, cv2.COLOR_RGB2BGR)
+            right_bgr = cv2.cvtColor(right_f, cv2.COLOR_RGB2BGR)
+            
+            # 1. Right eye view
+            w_right.write(right_bgr)
+            
+            # 2. Side-by-Side (Left | Right)
+            sbs_bgr = np.concatenate([left_bgr, right_bgr], axis=1)
+            w_sbs.write(sbs_bgr)
+            
+            # 3. Red-Cyan Anaglyph: Left Red, Right Green/Blue
+            ana_bgr = np.empty_like(left_bgr)
+            ana_bgr[:, :, 0] = right_bgr[:, :, 0] # Blue from Right
+            ana_bgr[:, :, 1] = right_bgr[:, :, 1] # Green from Right
+            ana_bgr[:, :, 2] = left_bgr[:, :, 2]  # Red from Left
+            w_ana.write(ana_bgr)
+            
+        w_right.release()
+        w_sbs.release()
+        w_ana.release()
+        del padded_left, padded_right
+        SF_LOG.info("All stereo video outputs completed successfully.")
 
         if progress:
             progress(1.0, desc=f"{progress_prefix}M2SVid stage complete!")
