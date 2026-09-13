@@ -29,15 +29,21 @@ class DepthCrafterPipeline(StableVideoDiffusionPipeline):
         Encode video into image embeddings.
 
         Args:
-            video (torch.Tensor): Input video tensor [b, c, h, w] in range [-1, 1].
+            video (torch.Tensor): Input video tensor [b, c, h, w] (CPU uint8 or GPU float).
             chunk_size (int): Chunk size for encoding.
 
         Returns:
             torch.Tensor: Image embeddings in shape [b, 1024].
         """
+        device = self._execution_device
         embeddings = []
         for i in range(0, video.shape[0], chunk_size):
             chunk = video[i : i + chunk_size]
+            if chunk.dtype == torch.uint8:
+                chunk = (chunk.to(device=device, dtype=self.dtype) / 255.0) * 2.0 - 1.0
+            else:
+                chunk = chunk.to(device=device, dtype=self.dtype)
+                
             chunk_224 = _resize_with_antialiasing(chunk.float(), (224, 224))
             chunk_224 = (chunk_224 + 1.0) / 2.0  # [-1, 1] -> [0, 1]
             tmp = self.feature_extractor(
@@ -47,7 +53,7 @@ class DepthCrafterPipeline(StableVideoDiffusionPipeline):
                 do_resize=False,
                 do_rescale=False,
                 return_tensors="pt",
-            ).pixel_values.to(video.device, dtype=video.dtype)
+            ).pixel_values.to(device, dtype=self.dtype)
             embeddings.append(self.image_encoder(tmp).image_embeds)  # [b, 1024]
 
         embeddings = torch.cat(embeddings, dim=0)  # [t, 1024]
@@ -58,21 +64,38 @@ class DepthCrafterPipeline(StableVideoDiffusionPipeline):
         self,
         video: torch.Tensor,
         chunk_size: int = 14,
+        noise_aug_strength: float = 0.0,
+        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
     ) -> torch.Tensor:
         """
-        Encode video into VAE latents.
+        Encode video into VAE latents with streaming chunks to avoid 10GB VRAM spikes.
 
         Args:
-            video (torch.Tensor): Input video tensor [b, c, h, w] in range [-1, 1].
+            video (torch.Tensor): Input video tensor [b, c, h, w] (CPU uint8 or GPU float).
             chunk_size (int): Chunk size for encoding.
+            noise_aug_strength (float): Strength of noise augmentation.
+            generator (torch.Generator): Random generator.
 
         Returns:
             torch.Tensor: VAE latents in shape [b, c, h, w].
         """
+        device = self._execution_device
         video_latents = []
         for i in range(0, video.shape[0], chunk_size):
+            chunk = video[i : i + chunk_size]
+            if chunk.dtype == torch.uint8:
+                chunk = (chunk.to(device=device, dtype=self.vae.dtype) / 255.0) * 2.0 - 1.0
+            else:
+                chunk = chunk.to(device=device, dtype=self.vae.dtype)
+                
+            if noise_aug_strength > 0:
+                chunk_noise = randn_tensor(
+                    chunk.shape, generator=generator, device=device, dtype=chunk.dtype
+                )
+                chunk = chunk + noise_aug_strength * chunk_noise
+                
             video_latents.append(
-                self.vae.encode(video[i : i + chunk_size]).latent_dist.mode()
+                self.vae.encode(chunk).latent_dist.mode()
             )
         video_latents = torch.cat(video_latents, dim=0)
         return video_latents
@@ -173,8 +196,9 @@ class DepthCrafterPipeline(StableVideoDiffusionPipeline):
             video = torch.from_numpy(video.transpose(0, 3, 1, 2))
         else:
             assert isinstance(video, torch.Tensor)
-        video = video.to(device=device, dtype=self.dtype)
-        video = video * 2.0 - 1.0  # [0,1] -> [-1,1], in [t, c, h, w]
+        # Keep video on CPU in uint8 (only 5GB RAM instead of 43GB RAM or 10GB VRAM!)
+        if video.dtype != torch.uint8:
+            video = video * 2.0 - 1.0
 
         if track_time:
             start_event = torch.cuda.Event(enable_timing=True)
@@ -189,14 +213,6 @@ class DepthCrafterPipeline(StableVideoDiffusionPipeline):
             0
         )  # [1, t, 1024]
         torch.cuda.empty_cache()
-        # 4. Encode input image using VAE
-        if noise_aug_strength > 0:
-            for i in range(0, video.shape[0], decode_chunk_size):
-                chunk = video[i : i + decode_chunk_size]
-                chunk_noise = randn_tensor(
-                    chunk.shape, generator=generator, device=device, dtype=video.dtype
-                )
-                video[i : i + decode_chunk_size] = chunk + noise_aug_strength * chunk_noise
 
         # pdb.set_trace()
         needs_upcasting = (
@@ -205,9 +221,12 @@ class DepthCrafterPipeline(StableVideoDiffusionPipeline):
         if needs_upcasting:
             self.vae.to(dtype=torch.float32)
 
+        # 4. Encode input image using VAE with streaming chunks and noise injection
         video_latents = self.encode_vae_video(
-            video.to(self.vae.dtype),
+            video,
             chunk_size=decode_chunk_size,
+            noise_aug_strength=noise_aug_strength,
+            generator=generator,
         ).unsqueeze(
             0
         )  # [1, t, c, h, w]

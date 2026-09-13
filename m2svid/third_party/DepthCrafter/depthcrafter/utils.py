@@ -71,7 +71,8 @@ def read_video_frames(
     logger.info(
         f"Final processing shape: {(len(frames_idx), *vid.get_batch([0]).shape[1:])}"
     )
-    frames = vid.get_batch(frames_idx).asnumpy().astype("float32") / 255.0
+    # Return uint8 numpy array directly to prevent allocating 38GB of float32 RAM
+    frames = vid.get_batch(frames_idx).asnumpy()
 
     return frames, fps
 
