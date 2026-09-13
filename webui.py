@@ -737,7 +737,7 @@ def step1_run_depthcrafter(video_path: str, process_res: int, guidance_scale: fl
         SF_LOG.error(f"DepthCrafter error: {e}")
         import traceback
         traceback.print_exc()
-        return f"Error: {e}", "", ""
+        return f"Error: {e}", None, None
 
 def step1_run_da3_depth(
     input_video: str,
