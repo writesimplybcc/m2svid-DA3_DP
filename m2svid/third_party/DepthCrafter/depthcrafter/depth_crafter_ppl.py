@@ -99,7 +99,8 @@ class DepthCrafterPipeline(StableVideoDiffusionPipeline):
             latent = self.vae.encode(chunk).latent_dist.mode().cpu()
             video_latents.append(latent)
             
-        video_latents = torch.cat(video_latents, dim=0).to(device=device)
+        # Keep full video latents on CPU to avoid holding 1.1GB+ on GPU VRAM; streamed per-window
+        video_latents = torch.cat(video_latents, dim=0).cpu()
         return video_latents
 
     @staticmethod
@@ -211,7 +212,7 @@ class DepthCrafterPipeline(StableVideoDiffusionPipeline):
 
         video_embeddings = self.encode_video(
             video, chunk_size=decode_chunk_size
-        ).unsqueeze(
+        ).cpu().unsqueeze(
             0
         )  # [1, t, 1024]
         torch.cuda.empty_cache()
@@ -295,8 +296,8 @@ class DepthCrafterPipeline(StableVideoDiffusionPipeline):
                 [latents_init[:, -overlap:], latents_init[:, :stride]], dim=1
             )
 
-            video_latents_current = video_latents[:, idx_start:idx_end]
-            video_embeddings_current = video_embeddings[:, idx_start:idx_end]
+            video_latents_current = video_latents[:, idx_start:idx_end].to(device=device, dtype=latents_init.dtype)
+            video_embeddings_current = video_embeddings[:, idx_start:idx_end].to(device=device, dtype=latents_init.dtype)
 
             with self.progress_bar(total=num_inference_steps) as progress_bar:
                 for i, t in enumerate(timesteps):

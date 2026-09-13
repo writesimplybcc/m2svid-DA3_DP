@@ -92,10 +92,10 @@ class DepthCrafterInference:
             self.pipe.disable_attention_slicing()
         elif total_vram_gb >= 11.0:
             # 12GB - 16GB GPUs (RTX 3060 12GB, 4070, 4080):
-            # Native SDPA computes attention in SRAM with high efficiency.
-            # Slicing is disabled for maximum speed unless resolution is >=1440 and window is very large (>80)
-            if process_res >= 1440 and window_size > 80:
-                logger.info(f"[DepthCrafter] 12GB GPU detected ({total_vram_gb:.1f} GB) with 1440p+ and large window ({window_size}). Using 'auto' attention slicing for memory safety.")
+            # To guarantee staying below the ~10.5GB Windows WDDM paging ceiling:
+            # If window_size > 50 or process_res >= 1024, auto-slice attention heads to keep VRAM ~6.5-7.5 GB.
+            if window_size > 50 or process_res >= 1024:
+                logger.info(f"[DepthCrafter] 12GB GPU detected ({total_vram_gb:.1f} GB) with window {window_size} / res {process_res}. Using 'auto' attention slicing to stay strictly in fast VRAM.")
                 self.pipe.enable_attention_slicing("auto")
             else:
                 logger.info(f"[DepthCrafter] 12GB GPU detected ({total_vram_gb:.1f} GB). Disabling attention slicing for fastest parallel execution.")

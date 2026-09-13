@@ -20,6 +20,14 @@ Requirements:
 import os
 import sys
 
+# Ensure UTF-8 stdout/stderr on Windows consoles to prevent charmap UnicodeEncodeErrors with emojis
+if sys.platform == "win32":
+    import io
+    if hasattr(sys.stdout, "buffer"):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "buffer"):
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
 # Provide immediate feedback to the console before heavy imports lock up the thread
 print("===============================================================")
 print("🚀 Starting StereoFaster WebUI Initialization...")
