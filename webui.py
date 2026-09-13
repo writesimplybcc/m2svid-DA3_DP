@@ -706,7 +706,7 @@ def clear_cuda():
 # STEP 1: DA3 Depth Estimation
 # =============================================================================
 
-def step1_run_depthcrafter(video_path: str, process_res: int, guidance_scale: float, inference_steps: int, window_size: int, overlap: int, progress=gr.Progress(track_tqdm=True)) -> Tuple[str, str, str]:
+def step1_run_depthcrafter(video_path: str, process_res: int, guidance_scale: float, inference_steps: int, window_size: int, overlap: int, attn_slicing: str = "Auto (Adapts to GPU VRAM)", progress=gr.Progress(track_tqdm=True)) -> Tuple[str, str, str]:
     if not video_path:
         return "No video selected.", "", ""
     
@@ -725,19 +725,32 @@ def step1_run_depthcrafter(video_path: str, process_res: int, guidance_scale: fl
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps <= 0: fps = 30.0
         cap.release()
-        depth = run_depthcrafter_depth(str(vp), process_res=process_res, guidance_scale=guidance_scale, num_inference_steps=inference_steps, window_size=window_size, overlap=overlap, progress=progress)
+        depth = run_depthcrafter_depth(
+            str(vp),
+            process_res=process_res,
+            guidance_scale=guidance_scale,
+            num_inference_steps=inference_steps,
+            window_size=window_size,
+            overlap=overlap,
+            attn_slicing=attn_slicing,
+            progress=progress
+        )
         
         save_m2svid_compatible_npz(depth, str(out_npz))
         _create_depth_preview_video(depth, str(out_mp4), fps)
-        
-        from m2svid.prepare_depthcrafter import unload_depthcrafter_model
-        unload_depthcrafter_model()
         return "DepthCrafter estimation complete!", str(out_mp4), str(out_npz)
     except Exception as e:
         SF_LOG.error(f"DepthCrafter error: {e}")
         import traceback
         traceback.print_exc()
         return f"Error: {e}", None, None
+    finally:
+        try:
+            from m2svid.prepare_depthcrafter import unload_depthcrafter_model
+            unload_depthcrafter_model()
+        except Exception:
+            pass
+        clear_cuda()
 
 def step1_run_da3_depth(
     input_video: str,
@@ -1562,6 +1575,12 @@ def create_stereofaster_ui():
                         dc_window_size = gr.Slider(10, 200, value=110, step=1, label="Window Size")
                         dc_overlap = gr.Slider(0, 100, value=25, step=1, label="Overlap")
                         dc_max_res = gr.Slider(256, 3840, value=1024, step=64, label="Max Resolution (Longest Edge)", info="GUIDELINE: 1024 = 12GB VRAM (RTX 3060/4070). 1536 = 24GB VRAM (RTX 4090). Setting this to 4K (3840) will crash almost any GPU due to the massive VRAM required for diffusion models.")
+                        dc_attn_slicing = gr.Dropdown(
+                            choices=["Auto (Adapts to GPU VRAM)", "Disabled (Fastest / 12GB+ GPUs)", "Enabled (Low VRAM / <=8GB)"],
+                            value="Auto (Adapts to GPU VRAM)",
+                            label="Attention Slicing",
+                            info="Auto: Disables slicing for maximum speed on 12GB+ GPUs, automatically slices on <=8GB cards or huge workloads."
+                        )
                         
                         dc_batch_depth_btn = gr.Button("📦 Run Batch Depth Processing on All Source Videos", variant="secondary")
                     with gr.Column(scale=1):
@@ -1733,7 +1752,7 @@ def create_stereofaster_ui():
         # Wire step 1 (DepthCrafter)
         dc_step1_btn.click(
             fn=step1_run_depthcrafter,
-            inputs=[dc_step1_dropdown, dc_max_res, dc_guidance_scale, dc_inference_steps, dc_window_size, dc_overlap],
+            inputs=[dc_step1_dropdown, dc_max_res, dc_guidance_scale, dc_inference_steps, dc_window_size, dc_overlap, dc_attn_slicing],
             outputs=[dc_step1_status, preview_depth, dc_depth_file],
         )
 

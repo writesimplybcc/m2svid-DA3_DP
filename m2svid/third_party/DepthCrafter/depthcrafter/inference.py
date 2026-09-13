@@ -60,12 +60,50 @@ class DepthCrafterInference:
         else:
             self.pipe.to(device)
 
-        try:
-            self.pipe.enable_xformers_memory_efficient_attention()
-        except (ImportError, ModuleNotFoundError, AttributeError) as e:
-            logger.warning(f"Xformers is not enabled: {e}")
+        # In PyTorch 2.0+, native SDPA (AttnProcessor2_0) handles arbitrary batch sizes natively
+        # and avoids xformers' gridDim.y > 65535 CUDA invalid configuration crash on high-res videos (e.g. 1440p).
+        if hasattr(self.pipe, "disable_xformers_memory_efficient_attention"):
+            self.pipe.disable_xformers_memory_efficient_attention()
 
-        self.pipe.enable_attention_slicing()
+        self.configure_attention_slicing(mode="auto")
+
+    def configure_attention_slicing(self, mode: str = "auto", window_size: int = 110, process_res: int = 1024):
+        """
+        Dynamically adapts attention slicing based on detected GPU VRAM, resolution, and window size.
+        """
+        total_vram_gb = 0.0
+        if torch.cuda.is_available():
+            total_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+
+        mode_clean = str(mode).lower()
+        if "disabled" in mode_clean or "off" in mode_clean:
+            logger.info(f"[DepthCrafter] Attention slicing explicitly DISABLED for maximum speed.")
+            self.pipe.disable_attention_slicing()
+            return
+        elif "enabled" in mode_clean or "low" in mode_clean:
+            logger.info(f"[DepthCrafter] Attention slicing explicitly ENABLED for low memory footprint.")
+            self.pipe.enable_attention_slicing("auto")
+            return
+
+        # Adaptive mode ("auto") based on detected hardware:
+        if total_vram_gb >= 20.0:
+            # 24GB+ GPUs (RTX 3090, 4090, 5090, RTX 6000 Ada): no slicing needed, run full speed
+            logger.info(f"[DepthCrafter] High VRAM detected ({total_vram_gb:.1f} GB). Disabling attention slicing for maximum throughput.")
+            self.pipe.disable_attention_slicing()
+        elif total_vram_gb >= 11.0:
+            # 12GB - 16GB GPUs (RTX 3060 12GB, 4070, 4080):
+            # Native SDPA computes attention in SRAM with high efficiency.
+            # Slicing is disabled for maximum speed unless resolution is >=1440 and window is very large (>80)
+            if process_res >= 1440 and window_size > 80:
+                logger.info(f"[DepthCrafter] 12GB GPU detected ({total_vram_gb:.1f} GB) with 1440p+ and large window ({window_size}). Using 'auto' attention slicing for memory safety.")
+                self.pipe.enable_attention_slicing("auto")
+            else:
+                logger.info(f"[DepthCrafter] 12GB GPU detected ({total_vram_gb:.1f} GB). Disabling attention slicing for fastest parallel execution.")
+                self.pipe.disable_attention_slicing()
+        else:
+            # <= 8GB GPUs: enable attention slicing to prevent OOM
+            logger.info(f"[DepthCrafter] Low VRAM detected ({total_vram_gb:.1f} GB <= 8GB). Enabling attention slicing ('auto') to conserve VRAM.")
+            self.pipe.enable_attention_slicing("auto")
 
     def infer(
         self,
