@@ -21,6 +21,13 @@ def get_depthcrafter_model(unet_path="tencent/DepthCrafter"):
             pre_train_path="stabilityai/stable-video-diffusion-img2vid-xt",
             cpu_offload="model"
         )
+        try:
+            if hasattr(_cached_depthcrafter_model.pipe.vae, "enable_slicing"):
+                _cached_depthcrafter_model.pipe.vae.enable_slicing()
+            if hasattr(_cached_depthcrafter_model.pipe.vae, "enable_tiling"):
+                _cached_depthcrafter_model.pipe.vae.enable_tiling()
+        except Exception as e:
+            print(f"[DepthCrafter] VAE tiling notice: {e}")
     return _cached_depthcrafter_model
 
 def run_depthcrafter_depth(video_path: str, process_res: int, guidance_scale: float = 1.0, num_inference_steps: int = 5, window_size: int = 110, overlap: int = 25, max_frames: int = -1, progress=None) -> np.ndarray:
@@ -61,6 +68,7 @@ def run_depthcrafter_depth(video_path: str, process_res: int, guidance_scale: fl
             num_inference_steps=num_inference_steps,
             window_size=window_size,
             overlap=overlap,
+            decode_chunk_size=1,
             track_time=False,
             callback_on_step_end=on_step_end,
         ).frames[0]

@@ -81,8 +81,10 @@ class DepthCrafterPipeline(StableVideoDiffusionPipeline):
         """
         device = self._execution_device
         video_latents = []
-        for i in range(0, video.shape[0], chunk_size):
-            chunk = video[i : i + chunk_size]
+        # Encode 1 frame at a time to keep VAE activation memory < 800 MB even at 1440p / 4K
+        vae_batch = 1
+        for i in range(0, video.shape[0], vae_batch):
+            chunk = video[i : i + vae_batch]
             if chunk.dtype == torch.uint8:
                 chunk = (chunk.to(device=device, dtype=self.vae.dtype) / 255.0) * 2.0 - 1.0
             else:
@@ -94,10 +96,10 @@ class DepthCrafterPipeline(StableVideoDiffusionPipeline):
                 )
                 chunk = chunk + noise_aug_strength * chunk_noise
                 
-            video_latents.append(
-                self.vae.encode(chunk).latent_dist.mode()
-            )
-        video_latents = torch.cat(video_latents, dim=0)
+            latent = self.vae.encode(chunk).latent_dist.mode().cpu()
+            video_latents.append(latent)
+            
+        video_latents = torch.cat(video_latents, dim=0).to(device=device)
         return video_latents
 
     @staticmethod
