@@ -51,11 +51,27 @@ def run_depthcrafter_depth(video_path: str, process_res: int, guidance_scale: fl
         sys.modules['__main__'].GLOBAL_CANCEL = False
         raise RuntimeError("Stopped by user.")
         
-    print(f"[DepthCrafter] Running inference on {len(frames)} frames...")
+    num_frames = len(frames)
+    stride = window_size - overlap if window_size > overlap else 1
+    total_windows = max(1, (num_frames - overlap + stride - 1) // stride)
+    print(f"[DepthCrafter] Running inference on {num_frames} frames ({total_windows} sliding windows of {window_size} frames)...", flush=True)
+    
+    current_window = [0]
     
     def on_step_end(pipeline, step: int, timestep: int, callback_kwargs: dict):
-        if (step + 1) % 5 == 0 or (step + 1) == num_inference_steps:
-            print(f"[DepthCrafter] Denoising step {step + 1}/{num_inference_steps} ...")
+        if step == 0:
+            current_window[0] += 1
+        w_idx = min(current_window[0], total_windows)
+        
+        # Print with flush=True so terminal updates immediately
+        print(f"[DepthCrafter] 🪟 Window {w_idx}/{total_windows} | Step {step + 1}/{num_inference_steps}", flush=True)
+        
+        if progress:
+            try:
+                frac = min(0.95, 0.1 + 0.85 * ((w_idx - 1) * num_inference_steps + step + 1) / (total_windows * num_inference_steps))
+                progress(frac, desc=f"DepthCrafter: Window {w_idx}/{total_windows} (Step {step + 1}/{num_inference_steps})")
+            except Exception:
+                pass
         return callback_kwargs
 
     with torch.inference_mode():
