@@ -94,7 +94,7 @@ class DepthCrafterInference:
             # 12GB - 16GB GPUs (RTX 3060 12GB, 4070, 4080):
             # To guarantee staying below the ~10.5GB Windows WDDM paging ceiling:
             # If window_size > 50 or process_res >= 1024, auto-slice attention heads to keep VRAM ~6.5-7.5 GB.
-            if window_size > 50 or process_res >= 1024:
+            if window_size > 25 or process_res >= 1024:
                 logger.info(f"[DepthCrafter] 12GB GPU detected ({total_vram_gb:.1f} GB) with window {window_size} / res {process_res}. Using 'auto' attention slicing to stay strictly in fast VRAM.")
                 self.pipe.enable_attention_slicing("auto")
             else:

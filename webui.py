@@ -1580,8 +1580,8 @@ def create_stereofaster_ui():
                     with gr.Column(scale=2):
                         dc_guidance_scale = gr.Slider(0.1, 10.0, value=1.0, step=0.1, label="Guidance Scale")
                         dc_inference_steps = gr.Slider(1, 50, value=5, step=1, label="Inference Steps (Default 5 for speed)")
-                        dc_window_size = gr.Slider(10, 200, value=110, step=1, label="Window Size")
-                        dc_overlap = gr.Slider(0, 100, value=25, step=1, label="Overlap")
+                        dc_window_size = gr.Slider(10, 200, value=30, step=1, label="Window Size", info="GUIDELINE: 25-30 for 12GB VRAM GPUs (RTX 3060) to stay strictly in fast VRAM (~8-9GB) and prevent Windows PCIe memory paging. 80-110 for 24GB+ GPUs.")
+                        dc_overlap = gr.Slider(0, 100, value=10, step=1, label="Overlap", info="Recommended: 10 for Window Size 30 (stride = 20 frames)")
                         dc_max_res = gr.Slider(256, 3840, value=1024, step=64, label="Max Resolution (Longest Edge)", info="GUIDELINE: 1024 = 12GB VRAM (RTX 3060/4070). 1536 = 24GB VRAM (RTX 4090). Setting this to 4K (3840) will crash almost any GPU due to the massive VRAM required for diffusion models.")
                         dc_attn_slicing = gr.Dropdown(
                             choices=["Auto (Adapts to GPU VRAM)", "Disabled (Fastest / 12GB+ GPUs)", "Enabled (Low VRAM / <=8GB)"],

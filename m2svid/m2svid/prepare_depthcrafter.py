@@ -30,7 +30,7 @@ def get_depthcrafter_model(unet_path="tencent/DepthCrafter"):
             print(f"[DepthCrafter] VAE tiling notice: {e}")
     return _cached_depthcrafter_model
 
-def run_depthcrafter_depth(video_path: str, process_res: int, guidance_scale: float = 1.0, num_inference_steps: int = 5, window_size: int = 110, overlap: int = 25, max_frames: int = -1, attn_slicing: str = "Auto (Adapts to GPU VRAM)", progress=None) -> np.ndarray:
+def run_depthcrafter_depth(video_path: str, process_res: int, guidance_scale: float = 1.0, num_inference_steps: int = 5, window_size: int = 30, overlap: int = 10, max_frames: int = -1, attn_slicing: str = "Auto (Adapts to GPU VRAM)", progress=None) -> np.ndarray:
     model = get_depthcrafter_model()
     if hasattr(model, "configure_attention_slicing"):
         model.configure_attention_slicing(mode=attn_slicing, window_size=window_size, process_res=process_res)
