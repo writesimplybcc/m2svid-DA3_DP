@@ -301,7 +301,17 @@ def run_depth_pro_depth(
     depth = np.stack(depths, axis=0)
     return depth
 
-def run_depth_on_source_videos(progress=gr.Progress(track_tqdm=True), model_name=None, process_res=720, batch_size=4):
+def run_depth_on_source_videos(
+    progress=gr.Progress(track_tqdm=True),
+    model_name=None,
+    process_res=720,
+    batch_size=4,
+    guidance_scale=1.0,
+    inference_steps=5,
+    window_size=30,
+    overlap=10,
+    attn_slicing="Auto (Adapts to GPU VRAM)"
+):
     """Process all videos in SOURCE_DIR and save depth .npz and depth_depth.mp4 in DEPTH_DIR if missing."""
     SF_LOG.info(f"Starting batch depth processing with model {model_name} on source_videos directory")
     global DEFAULT_DA3_MODEL
@@ -354,7 +364,16 @@ def run_depth_on_source_videos(progress=gr.Progress(track_tqdm=True), model_name
                     depth = np.zeros_like(inv_depth)
             elif is_depthcrafter:
                 from m2svid.prepare_depthcrafter import run_depthcrafter_depth
-                depth = run_depthcrafter_depth(str(vp), process_res=process_res, progress=progress)
+                depth = run_depthcrafter_depth(
+                    str(vp),
+                    process_res=process_res,
+                    guidance_scale=guidance_scale,
+                    num_inference_steps=inference_steps,
+                    window_size=window_size,
+                    overlap=overlap,
+                    attn_slicing=attn_slicing,
+                    progress=progress
+                )
                 # DepthCrafter is ALREADY temporally consistent and returns [0,1] normalized.
                 # However, M2SVid expects `high value = near`. 
                 # Does DepthCrafter return high=near or high=far?
@@ -1819,7 +1838,16 @@ def create_stereofaster_ui():
         # Batch buttons
         dc_batch_depth_btn.click(
             fn=run_depth_on_source_videos,
-            inputs=[gr.Textbox(value="tencent/DepthCrafter", visible=False), dc_max_res, gr.Slider(value=1, visible=False)],
+            inputs=[
+                gr.Textbox(value="tencent/DepthCrafter", visible=False),
+                dc_max_res,
+                gr.Slider(value=1, visible=False),
+                dc_guidance_scale,
+                dc_inference_steps,
+                dc_window_size,
+                dc_overlap,
+                dc_attn_slicing,
+            ],
             outputs=[dc_batch_depth_btn, source_dropdown, depth_dropdown, dc_step1_dropdown],
         )
         batch_depth_btn.click(
