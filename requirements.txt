@@ -80,6 +80,7 @@ numpy<2.0.0
 evo
 scipy<1.14.0
 pyyaml
+nvitop                      # Interactive real-time GPU/VRAM/CUDA monitoring
 
 # =============================================================================
 # Optional but recommended for full functionality
