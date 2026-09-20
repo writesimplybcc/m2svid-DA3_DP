@@ -334,6 +334,11 @@ def run_depth_on_source_videos(
     SF_LOG.info(f"Found {total} video(s) in source_videos to process after filtering")
     
     for i, vp in enumerate(vids):
+        global GLOBAL_CANCEL
+        if GLOBAL_CANCEL:
+            GLOBAL_CANCEL = False
+            SF_LOG.info("Batch depth processing cancelled by user.")
+            break
         stem = vp.stem
         out_npz = DEPTH_DIR / f"{stem}{suffix}_depth.npz"
         out_mp4 = DEPTH_DIR / f"{stem}{suffix}_depth.mp4"
@@ -374,11 +379,6 @@ def run_depth_on_source_videos(
                     attn_slicing=attn_slicing,
                     progress=progress
                 )
-                # DepthCrafter is ALREADY temporally consistent and returns [0,1] normalized.
-                # However, M2SVid expects `high value = near`. 
-                # Does DepthCrafter return high=near or high=far?
-                # Usually depth models return close=bright. 
-                # Let's assume close=bright (high=near), same as Depth Pro.
             else:
                 depth = run_da3_depth(frames, model_name=model_name, process_res=process_res, device=device, batch_size=batch_size, progress=progress)
                 depth = -depth
@@ -395,6 +395,9 @@ def run_depth_on_source_videos(
                 except Exception: pass
         except Exception as e:
             SF_LOG.error(f"Depth error on {stem}: {e}")
+            if "Stopped by user" in str(e):
+                SF_LOG.info("Batch depth processing cancelled by user.")
+                break
             if progress:
                 try: progress(float(i+1)/max(1,total), desc=f"Error {stem}")
                 except Exception: pass
@@ -424,6 +427,11 @@ def run_m2svid_on_pairs(m2svid_config, m2svid_ckpt, disparity_perc, convergence_
     total = len(vids)
     SF_LOG.info(f"Found {total} video(s) to process")
     for i, vp in enumerate(vids):
+        global GLOBAL_CANCEL
+        if GLOBAL_CANCEL:
+            GLOBAL_CANCEL = False
+            SF_LOG.info("Batch M2SVid processing cancelled by user.")
+            break
         stem = vp.stem
         dc_npz = DEPTH_DIR / f"{stem}_DC_depth.npz"
         legacy_npz = DEPTH_DIR / f"{stem}_depth.npz"
@@ -479,10 +487,14 @@ def run_m2svid_on_pairs(m2svid_config, m2svid_ckpt, disparity_perc, convergence_
                 except Exception: pass
         except Exception as e:
             SF_LOG.error(f"M2SVid error on {stem}: {e}")
+            STATE["input_video"] = prev_input
+            if "Stopped by user" in str(e):
+                SF_LOG.info("Batch M2SVid processing cancelled by user.")
+                break
             import traceback
             traceback.print_exc()
-            STATE["input_video"] = prev_input
     SF_LOG.info("Batch M2SVid processing complete")
+    return "✅ Batch M2SVid processing complete! All outputs saved to final_videos/."
 
 
 def _background_batch_worker():
@@ -1867,7 +1879,7 @@ def create_stereofaster_ui():
         batch_m2svid_btn.click(
             fn=run_m2svid_on_pairs,
             inputs=[m2svid_config, m2svid_ckpt, disparity_perc, convergence_point, closing_kernel, mask_antialias, warping_batch_size, gen_chunk_size, m2svid_process_res],
-            outputs=None,
+            outputs=[step2_status],
         )
 
         # Refresh button
