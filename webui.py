@@ -425,10 +425,11 @@ def run_m2svid_on_pairs(m2svid_config, m2svid_ckpt, disparity_perc, convergence_
     SF_LOG.info(f"Found {total} video(s) to process")
     for i, vp in enumerate(vids):
         stem = vp.stem
-        depth_npz = None
-
+        dc_npz = DEPTH_DIR / f"{stem}_DC_depth.npz"
         legacy_npz = DEPTH_DIR / f"{stem}_depth.npz"
-        if legacy_npz.exists():
+        if dc_npz.exists():
+            depth_npz = dc_npz
+        elif legacy_npz.exists():
             depth_npz = legacy_npz
         else:
             candidates = sorted([p for p in DEPTH_DIR.iterdir() if p.is_file() and p.suffix == ".npz" and p.stem.startswith(stem + "_") and "_depth" in p.stem])
@@ -710,8 +711,11 @@ def select_source_video(stem):
                 break
     
     depth_npz = None
+    dc_npz = DEPTH_DIR / f"{stem}_DC_depth.npz"
     legacy_npz = DEPTH_DIR / f"{stem}_depth.npz"
-    if legacy_npz.exists():
+    if dc_npz.exists():
+        depth_npz = dc_npz
+    elif legacy_npz.exists():
         depth_npz = legacy_npz
     else:
         candidates = sorted([p for p in DEPTH_DIR.iterdir() if p.is_file() and p.suffix == ".npz" and p.stem.startswith(stem + "_") and "_depth" in p.stem])
@@ -750,6 +754,8 @@ def step1_run_depthcrafter(video_path: str, process_res: int, guidance_scale: fl
         import cv2
         cap = cv2.VideoCapture(str(vp))
         fps = cap.get(cv2.CAP_PROP_FPS)
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         if fps <= 0: fps = 30.0
         cap.release()
         depth = run_depthcrafter_depth(
@@ -763,6 +769,9 @@ def step1_run_depthcrafter(video_path: str, process_res: int, guidance_scale: fl
             progress=progress
         )
         
+        if depth.shape[1:] != (h, w):
+            depth = np.stack([cv2.resize(d, (w, h), cv2.INTER_CUBIC) for d in depth])
+            
         save_m2svid_compatible_npz(depth, str(out_npz))
         _create_depth_preview_video(depth, str(out_mp4), fps)
         return "DepthCrafter estimation complete!", str(out_mp4), str(out_npz)
