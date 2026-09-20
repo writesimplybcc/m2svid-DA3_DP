@@ -355,22 +355,18 @@ def run_depth_on_source_videos(
             
         SF_LOG.info(f"Depth processing [{i+1}/{total}]: {stem} using model {model_name}")
         try:
-            frames, fps, (h, w) = load_video_frames(str(vp), target_fps=0.0)
-            SF_LOG.debug(f"Loaded {len(frames)} frames @ {fps}fps, size {w}x{h}")
-            
             is_depth_pro = "DepthPro" in model_name or "depth-pro" in model_name
             is_depthcrafter = "DepthCrafter" in model_name
             device = "cuda" if torch.cuda.is_available() else "cpu"
             
-            if is_depth_pro:
-                depth = run_depth_pro_depth(frames, device=device, progress=progress)
-                inv_depth = 1.0 / np.clip(depth, 1e-4, 1e5)
-                inv_min, inv_max = inv_depth.min(), inv_depth.max()
-                if inv_max - inv_min > 1e-6:
-                    depth = (inv_depth - inv_min) / (inv_max - inv_min)
-                else:
-                    depth = np.zeros_like(inv_depth)
-            elif is_depthcrafter:
+            if is_depthcrafter:
+                cap = cv2.VideoCapture(str(vp))
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                if fps <= 0: fps = 30.0
+                cap.release()
+                
                 from m2svid.prepare_depthcrafter import run_depthcrafter_depth
                 depth = run_depthcrafter_depth(
                     str(vp),
@@ -383,8 +379,20 @@ def run_depth_on_source_videos(
                     progress=progress
                 )
             else:
-                depth = run_da3_depth(frames, model_name=model_name, process_res=process_res, device=device, batch_size=batch_size, progress=progress)
-                depth = -depth
+                frames, fps, (h, w) = load_video_frames(str(vp), target_fps=0.0)
+                SF_LOG.debug(f"Loaded {len(frames)} frames @ {fps}fps, size {w}x{h}")
+                if is_depth_pro:
+                    depth = run_depth_pro_depth(frames, device=device, progress=progress)
+                    inv_depth = 1.0 / np.clip(depth, 1e-4, 1e5)
+                    inv_min, inv_max = inv_depth.min(), inv_depth.max()
+                    if inv_max - inv_min > 1e-6:
+                        depth = (inv_depth - inv_min) / (inv_max - inv_min)
+                    else:
+                        depth = np.zeros_like(inv_depth)
+                else:
+                    depth = run_da3_depth(frames, model_name=model_name, process_res=process_res, device=device, batch_size=batch_size, progress=progress)
+                    depth = -depth
+                del frames
                 
             if depth.shape[1:] != (h, w):
                 depth = np.stack([cv2.resize(d, (w, h), cv2.INTER_CUBIC) for d in depth])
@@ -410,8 +418,17 @@ def run_depth_on_source_videos(
     src = get_source_video_list()
     dep = get_depth_video_list()
     
-    from m2svid.prepare_da3_depth import unload_da3_model
-    unload_da3_model()
+    try:
+        from m2svid.prepare_da3_depth import unload_da3_model
+        unload_da3_model()
+    except Exception:
+        pass
+    try:
+        from m2svid.prepare_depthcrafter import unload_depthcrafter_model
+        unload_depthcrafter_model()
+    except Exception:
+        pass
+    clear_cuda()
     
     return (
         gr.update(),
@@ -534,10 +551,6 @@ def _background_batch_worker():
         run_depth_on_source_videos(progress=None)
         run_m2svid_on_pairs()
         SF_LOG.info("Background batch worker completed")
-    except Exception as e:
-        SF_LOG.error(f"Background batch worker failed: {e}")
-        import traceback
-        traceback.print_exc()
     except Exception as e:
         SF_LOG.error(f"Background batch worker failed: {e}")
         import traceback
@@ -706,7 +719,7 @@ MODEL_SUFFIX_MAP = {
 
 def get_model_suffix(model_name: str) -> str:
     """Return the suffix for a given depth model identifier."""
-    return MODEL_SUFFIX_MAP.get(model_name, "_depth")
+    return MODEL_SUFFIX_MAP.get(model_name, "")
 
 
 def get_model_depth_paths(stem: str, include_all: bool = False):
@@ -737,13 +750,13 @@ def get_model_depth_paths(stem: str, include_all: bool = False):
 
 
 def select_source_video(stem):
-    """Load video and depth paths for a stem selected from dropdown."""
+    """Load video, depth npz, and depth mp4 paths for a stem selected from dropdown."""
     if stem is None or (isinstance(stem, dict) and not stem.get("path")):
-        return None, None
+        return None, None, None
     if isinstance(stem, dict):
         stem = stem.get("orig_name", "") or ""
     if not stem:
-        return None, None
+        return None, None, None
     video_path = SOURCE_DIR / f"{stem}.mp4"
     if not video_path.exists():
         for ext in ('.mov', '.avi', '.mkv'):
@@ -753,18 +766,34 @@ def select_source_video(stem):
                 break
     
     depth_npz = None
-    dc_npz = DEPTH_DIR / f"{stem}_DC_depth.npz"
-    legacy_npz = DEPTH_DIR / f"{stem}_depth.npz"
-    if dc_npz.exists():
-        depth_npz = dc_npz
-    elif legacy_npz.exists():
-        depth_npz = legacy_npz
-    else:
-        candidates = sorted([p for p in DEPTH_DIR.iterdir() if p.is_file() and p.suffix == ".npz" and p.stem.startswith(stem + "_") and "_depth" in p.stem])
-        if candidates:
-            depth_npz = candidates[0]
+    depth_mp4 = None
     
-    return str(video_path) if video_path.exists() else None, str(depth_npz) if depth_npz else None
+    # Priority order: DepthCrafter -> Legacy/standard -> other model-tagged depths
+    candidates = [
+        DEPTH_DIR / f"{stem}_DC_depth",
+        DEPTH_DIR / f"{stem}_depth",
+    ]
+    if DEPTH_DIR.exists():
+        for p in sorted(DEPTH_DIR.glob(f"{stem}_*_depth.*")):
+            base = p.with_suffix("")
+            if base not in candidates:
+                candidates.append(base)
+                
+    for cand in candidates:
+        npz = cand.with_suffix(".npz")
+        mp4 = cand.with_suffix(".mp4")
+        if depth_npz is None and npz.exists():
+            depth_npz = npz
+        if depth_mp4 is None and mp4.exists():
+            depth_mp4 = mp4
+        if depth_npz and depth_mp4:
+            break
+    
+    return (
+        str(video_path) if video_path.exists() else None,
+        str(depth_npz) if depth_npz else None,
+        str(depth_mp4) if depth_mp4 else None
+    )
 
 
 def clear_cuda():
@@ -779,13 +808,13 @@ def clear_cuda():
 # STEP 1: DA3 Depth Estimation
 # =============================================================================
 
-def step1_run_depthcrafter(video_path: str, process_res: int, guidance_scale: float, inference_steps: int, window_size: int, overlap: int, attn_slicing: str = "Auto (Adapts to GPU VRAM)", progress=gr.Progress(track_tqdm=True)) -> Tuple[str, str, str]:
+def step1_run_depthcrafter(video_path: str, process_res: int, guidance_scale: float, inference_steps: int, window_size: int, overlap: int, attn_slicing: str = "Auto (Adapts to GPU VRAM)", progress=gr.Progress(track_tqdm=True)) -> Tuple[str, Optional[str], Optional[str], Optional[str]]:
     if not video_path:
-        return "No video selected.", "", ""
+        return "No video selected.", None, None, None
     
     vp = SOURCE_DIR / (video_path if "." in video_path else f"{video_path}.mp4")
     if not vp.exists():
-        return f"File not found: {vp}", "", ""
+        return f"File not found: {vp}", None, None, None
         
     stem = vp.stem
     out_npz = DEPTH_DIR / f"{stem}_DC_depth.npz"
@@ -816,12 +845,13 @@ def step1_run_depthcrafter(video_path: str, process_res: int, guidance_scale: fl
             
         save_m2svid_compatible_npz(depth, str(out_npz))
         _create_depth_preview_video(depth, str(out_mp4), fps)
-        return "DepthCrafter estimation complete!", str(out_mp4), str(out_npz)
+        STATE["depth_npz"] = str(out_npz)
+        return "DepthCrafter estimation complete!", str(out_mp4), str(out_npz), str(out_npz)
     except Exception as e:
         SF_LOG.error(f"DepthCrafter error: {e}")
         import traceback
         traceback.print_exc()
-        return f"Error: {e}", None, None
+        return f"Error: {e}", None, None, None
     finally:
         try:
             from m2svid.prepare_depthcrafter import unload_depthcrafter_model
@@ -1394,7 +1424,8 @@ def step2_run_m2svid(
         # Chunked blending and upsampling in small batches (16 frames)
         # to completely eliminate the 21GB/42GB contiguous CPU RAM allocation crash!
         T_total = input_video.shape[1]
-        shift = int(tw * disparity_perc * convergence_point)
+        orig_w = orig_shape[1]
+        shift = int(orig_w * disparity_perc * convergence_point)
         
         final_uint8_frames = []
         orig_left_uint8 = []
@@ -1571,6 +1602,7 @@ def get_depth_video_list():
 
 
 SUFFIX_TO_LABEL = {
+    "_DC": "DepthCrafter",
     "_NGL": "DA3: Nested Giant Large",
     "_ML": "DA3: Mono Large / Metric Large",
     "_G": "DA3: Giant",
@@ -1603,12 +1635,10 @@ def create_stereofaster_ui():
     
     if stems:
         default_stem = stems[0]
-        v_p, d_npz = select_source_video(default_stem)
+        v_p, d_npz, d_mp4 = select_source_video(default_stem)
         default_video = v_p
         default_depth_npz = d_npz
-        d_mp4 = DEPTH_DIR / f"{default_stem}_depth.mp4"
-        if d_mp4.exists():
-            default_depth_mp4 = str(d_mp4)
+        default_depth_mp4 = d_mp4
 
     with gr.Blocks(title="StereoFaster Hub", fill_width=True) as demo:
         gr.HTML(
@@ -1795,9 +1825,7 @@ def create_stereofaster_ui():
             if not stem:
                 return None, None, None, None, "16:9 (None)", "", None
 
-            v_p, d_npz = select_source_video(stem)
-            d_mp4 = DEPTH_DIR / f"{stem}_depth.mp4"
-            d_mp4_p = str(d_mp4) if d_mp4.exists() else None
+            v_p, d_npz, d_mp4_p = select_source_video(stem)
             
             SF_LOG.info(f"Loaded preview for '{stem}'")
             if d_mp4_p:
@@ -1817,27 +1845,26 @@ def create_stereofaster_ui():
             outputs=[preview_video, preview_depth, depth_input, depth_state, crop_preset, crop_res, crop_preview_state],
         )
         
-        def _toggle_preview(current_video, crop_preview):
+        def _toggle_preview(current_video, crop_preview, stem):
             # If current video is the full one, show crop preview
             if current_video and crop_preview and "crop_preview" not in current_video:
                 return crop_preview
             else:
                 # If currently showing cropped, or no crop exists, switch back to full
-                stem = source_dropdown.value
                 if stem:
-                    v_p, _ = select_source_video(stem)
+                    v_p, _, _ = select_source_video(stem)
                     return str(v_p) if v_p and v_p.exists() else None
             return None
             
         toggle_preview_btn.click(
             fn=_toggle_preview,
-            inputs=[preview_video, crop_preview_state],
+            inputs=[preview_video, crop_preview_state, source_dropdown],
             outputs=[preview_video],
         )
         
         def _apply_crop_and_refresh(stem, preset):
             if not stem: return gr.update(), gr.update()
-            v_p, _ = select_source_video(stem)
+            v_p, _, _ = select_source_video(stem)
             if v_p:
                 execute_crop(v_p, preset)
             
@@ -1878,7 +1905,7 @@ def create_stereofaster_ui():
         dc_step1_btn.click(
             fn=step1_run_depthcrafter,
             inputs=[dc_step1_dropdown, dc_max_res, dc_guidance_scale, dc_inference_steps, dc_window_size, dc_overlap, dc_attn_slicing],
-            outputs=[dc_step1_status, preview_depth, dc_depth_file],
+            outputs=[dc_step1_status, preview_depth, dc_depth_file, depth_state],
         )
 
         # Wire step 1 (Old DA3)

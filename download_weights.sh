@@ -23,6 +23,11 @@ echo "Caching Depth Anything 3 weights..."
 huggingface-cli download depth-anything/DA3NESTED-GIANT-LARGE-1.1
 huggingface-cli download depth-anything/DA3MONO-LARGE
 
+# 1.6 DepthCrafter Weights (Automatically caches via huggingface-cli)
+echo "Caching DepthCrafter weights..."
+huggingface-cli download tencent/DepthCrafter
+huggingface-cli download stabilityai/stable-video-diffusion-img2vid-xt
+
 # 2. LPIPS VGG weights
 # wget -q -O ckpts/vgg.pth "YOUR_VGG_URL"
 
