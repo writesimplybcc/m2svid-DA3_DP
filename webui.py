@@ -1705,7 +1705,6 @@ def create_stereofaster_ui():
                         m2svid_config = gr.Textbox(value=DEFAULT_M2SVID_CONFIG, label="Config Path", visible=False)
                         m2svid_ckpt = gr.Textbox(value=DEFAULT_M2SVID_CKPT, label="Checkpoint Path", visible=False)
                         
-                        batch_m2svid_btn = gr.Button("📦 Run Batch Stereography on All Matched Pairs", variant="secondary")
                         warping_batch_size = gr.Slider(1, 16, value=_VRAM_DEFAULTS["warp"], step=1, label="Warping Batch Size (lower = less VRAM)")
                         gen_chunk_size = gr.Slider(2, 35, value=_VRAM_DEFAULTS["gen_chunk"], step=1, label="Generation Chunk Size (lower = less VRAM)")
                         m2svid_process_res = gr.Dropdown(
@@ -1713,6 +1712,7 @@ def create_stereofaster_ui():
                             value="1024x576 (Optimal 12GB)",
                             label="M2SVid Processing Resolution"
                         )
+                        batch_m2svid_btn = gr.Button("📦 Run Batch Stereography on All Matched Pairs", variant="secondary")
 
                     with gr.Column(scale=1):
                         step2_btn = gr.Button("💫 Convert Selected to Stereo 3D", variant="primary", size="lg")
