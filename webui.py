@@ -308,7 +308,7 @@ def run_depth_on_source_videos(progress=gr.Progress(track_tqdm=True), model_name
     model_name = model_name or DEFAULT_DA3_MODEL
     suffix = get_model_suffix(model_name)
     
-    vids = [p for p in SOURCE_DIR.iterdir() if p.is_file() and p.suffix.lower() in ('.mp4', '.mov', '.avi', '.mkv')]
+    vids = sorted([p for p in SOURCE_DIR.iterdir() if p.is_file() and p.suffix.lower() in ('.mp4', '.mov', '.avi', '.mkv')], key=lambda p: p.name)
     
     final_vids = []
     stems_in_dir = {p.stem for p in vids}
@@ -401,7 +401,7 @@ def run_m2svid_on_pairs(m2svid_config, m2svid_ckpt, disparity_perc, convergence_
     SF_LOG.info("Starting batch M2SVid processing on source_videos + depthmaps_videos")
     cfg = m2svid_config or DEFAULT_M2SVID_CONFIG
     ckpt = m2svid_ckpt or DEFAULT_M2SVID_CKPT
-    vids = [p for p in SOURCE_DIR.iterdir() if p.is_file() and p.suffix.lower() in ('.mp4', '.mov', '.avi', '.mkv')]
+    vids = sorted([p for p in SOURCE_DIR.iterdir() if p.is_file() and p.suffix.lower() in ('.mp4', '.mov', '.avi', '.mkv')], key=lambda p: p.name)
     total = len(vids)
     SF_LOG.info(f"Found {total} video(s) to process")
     for i, vp in enumerate(vids):
@@ -1411,39 +1411,47 @@ def step2_run_m2svid(
 # Gradio Interface
 # =============================================================================
 
-def handle_source_upload(file):
-    if file is None:
+def handle_source_upload(files):
+    if not files:
         return None, gr.update()
-    src_path = file.name if hasattr(file, "name") else str(file)
-    dst_path = SOURCE_DIR / Path(src_path).name
-    shutil.copy(src_path, str(dst_path))
-    SF_LOG.info(f"Uploaded source video saved to {dst_path}")
+    if not isinstance(files, list):
+        files = [files]
+    last_dst = None
+    last_stem = ""
+    for f in files:
+        src_path = f.name if hasattr(f, "name") else str(f)
+        dst_path = SOURCE_DIR / Path(src_path).name
+        shutil.copy(src_path, str(dst_path))
+        SF_LOG.info(f"Uploaded source video saved to {dst_path}")
+        last_dst = str(dst_path)
+        last_stem = Path(src_path).stem
     stems = get_source_video_list()
-    return str(dst_path), gr.update(choices=[""] + stems, value=Path(src_path).stem)
+    return last_dst, gr.update(choices=[""] + stems, value=last_stem)
 
 
-def handle_depth_upload(file):
-    if file is None:
+def handle_depth_upload(files):
+    if not files:
         return None, gr.update()
-    src_path = file.name if hasattr(file, "name") else str(file)
-    dst_path = DEPTH_DIR / Path(src_path).name
-    shutil.copy(src_path, str(dst_path))
-    SF_LOG.info(f"Uploaded depth map video saved to {dst_path}")
-    
-    stem = Path(src_path).stem
-    if stem.endswith("_depth"):
-        base_stem = stem[:-6]
-    else:
-        base_stem = stem
-        
-    out_npz = DEPTH_DIR / f"{base_stem}_depth.npz"
-    try:
-        convert_depth_video_to_npz(str(dst_path), str(out_npz))
-    except Exception as e:
-        SF_LOG.error(f"Failed to automatically convert depth video to npz: {e}")
-        
+    if not isinstance(files, list):
+        files = [files]
+    last_dst = None
+    last_base_stem = ""
+    for f in files:
+        src_path = f.name if hasattr(f, "name") else str(f)
+        dst_path = DEPTH_DIR / Path(src_path).name
+        shutil.copy(src_path, str(dst_path))
+        SF_LOG.info(f"Uploaded depth map video saved to {dst_path}")
+        stem = Path(src_path).stem
+        base_stem = stem[:-6] if stem.endswith("_depth") else stem
+        out_npz = DEPTH_DIR / f"{base_stem}_depth.npz"
+        try:
+            convert_depth_video_to_npz(str(dst_path), str(out_npz))
+        except Exception as e:
+            SF_LOG.error(f"Failed to automatically convert depth video to npz: {e}")
+        last_dst = str(dst_path)
+        last_base_stem = base_stem
     stems = get_source_video_list()
-    return str(dst_path), gr.update(choices=[""] + stems, value=base_stem)
+    return last_dst, gr.update(choices=[""] + stems, value=last_base_stem)
 
 
 def get_depth_video_list():
@@ -1525,8 +1533,9 @@ def create_stereofaster_ui():
                     with gr.Column():
                         gr.Markdown("##### 📤 Source Video Management")
                         source_uploader = gr.File(
-                            label="Upload Source Video (saved to source_videos/)",
+                            label="Upload Source Video(s) (saved to source_videos/)",
                             file_types=["video"],
+                            file_count="multiple",
                             type="filepath"
                         )
                         source_dropdown = gr.Dropdown(
@@ -1555,8 +1564,9 @@ def create_stereofaster_ui():
                     with gr.Column():
                         gr.Markdown("##### 🗂️ Depth Map Management")
                         depth_uploader = gr.File(
-                            label="Upload External Depth Video (saved to depthmaps_videos/)",
+                            label="Upload External Depth Video(s) (saved to depthmaps_videos/)",
                             file_types=["video"],
+                            file_count="multiple",
                             type="filepath"
                         )
                         depth_dropdown = gr.Dropdown(
