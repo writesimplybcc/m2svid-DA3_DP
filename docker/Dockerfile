@@ -17,6 +17,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     wget \
     ffmpeg \
+    libavcodec-extra \
+    libx264-dev \
     libgl1-mesa-glx \
     libglib2.0-0 \
     libsm6 \
