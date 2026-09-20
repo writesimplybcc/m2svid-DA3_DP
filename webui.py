@@ -427,7 +427,7 @@ def run_m2svid_on_pairs(
     mask_antialias=False,
     warping_batch_size=None,
     gen_chunk_size=None,
-    m2svid_process_res="Native",
+    m2svid_process_res="1024x576 (Optimal 12GB)",
     progress=gr.Progress(track_tqdm=True)
 ):
     """Process pairs in SOURCE_DIR and DEPTH_DIR and save outputs into FINAL_DIR."""
@@ -436,6 +436,7 @@ def run_m2svid_on_pairs(
     ckpt = m2svid_ckpt or DEFAULT_M2SVID_CKPT
     warping_batch_size = warping_batch_size or _VRAM_DEFAULTS["warp"]
     gen_chunk_size = gen_chunk_size or _VRAM_DEFAULTS["gen_chunk"]
+    m2svid_process_res = m2svid_process_res or "1024x576 (Optimal 12GB)"
     vids = sorted([p for p in SOURCE_DIR.iterdir() if p.is_file() and p.suffix.lower() in ('.mp4', '.mov', '.avi', '.mkv')], key=lambda p: p.name)
     total = len(vids)
     SF_LOG.info(f"Found {total} video(s) to process")
@@ -1093,7 +1094,7 @@ def step2_run_m2svid(
     input_video_path: Optional[str] = None,
     warping_batch_size: int = 2,
     gen_chunk_size: int = 14,
-    m2svid_process_res: str = "Native",
+    m2svid_process_res: str = "1024x576 (Optimal 12GB)",
     progress=gr.Progress(track_tqdm=True),
     progress_prefix: str = ""
 ) -> Tuple[str, str, str, str, str]:
@@ -1184,6 +1185,7 @@ def step2_run_m2svid(
         # Create a hard mask [0, 1] for alpha blending later (no blur, avoids leaking black holes)
         original_mask = reprojected_mask_arr.permute(1, 0, 2, 3).float()
 
+        m2svid_process_res = m2svid_process_res or "1024x576 (Optimal 12GB)"
         if m2svid_process_res != "Native":
             res_str = m2svid_process_res.split(" ")[0]
             tw = int(res_str.split("x")[0])
@@ -1195,6 +1197,12 @@ def step2_run_m2svid(
         # SVD requires dimensions to be exactly divisible by 8 for its VAE latent space
         th = th - (th % 8)
         tw = tw - (tw % 8)
+
+        num_samples = gen_chunk_size
+        T = input_video.shape[1]
+        SF_LOG.info(f"[M2SVid] Configuration: resolution={tw}x{th} (setting='{m2svid_process_res}'), chunk_size={num_samples}, total_frames={T}")
+        print(f"\n[M2SVid] ⚙️ Processing resolution: {tw}x{th} (setting: '{m2svid_process_res}'), Chunk size: {num_samples}, Total frames: {T}")
+
         if orig_shape[0] != th or orig_shape[1] != tw:
             SF_LOG.info(f"Adjusting inputs for M2SVid from {orig_shape} to {(th, tw)} (must be divisible by 8)")
             input_video = torch.nn.functional.interpolate(input_video, size=(th, tw), mode="bilinear", align_corners=False)
@@ -1210,8 +1218,6 @@ def step2_run_m2svid(
         reprojected_mask_t = reprojected_mask_t.permute(1, 0, 2, 3)
 
         # prepare for generation
-        num_samples = gen_chunk_size
-        T = input_video.shape[1]
         SF_LOG.info(f"Video length {T} frames; model.max_frames={num_samples}")
 
         def _save_video(video_tensor, fps_val, path):
@@ -1277,6 +1283,8 @@ def step2_run_m2svid(
                 pass
             with torch.inference_mode():
                 final_generated = model.generate(input_batch)["generated-video"][0].cpu()
+            del input_batch
+            clear_cuda()
             t1 = time.time()
             print(f"[M2SVid] ✅ Generation finished in {t1 - t0:.1f} seconds!")
             SF_LOG.info(f"Single-chunk generation complete in {t1 - t0:.1f}s")
@@ -1321,6 +1329,8 @@ def step2_run_m2svid(
                     pass
                 with torch.inference_mode():
                     gen_chunk = model.generate(input_batch)["generated-video"][0].cpu()
+                del input_batch
+                clear_cuda()
                 t1 = time.time()
                 sys.stdout.flush()
                 print(f"[M2SVid] ✅ Chunk {idx+1}/{total_chunks} finished in {t1 - t0:.1f} seconds!")
@@ -1461,6 +1471,8 @@ def step2_run_m2svid(
 
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         clear_cuda()
         return f"❌ Error in M2SVid step: {str(e)}", None, None, None, None
 
@@ -1694,8 +1706,8 @@ def create_stereofaster_ui():
                         warping_batch_size = gr.Slider(1, 16, value=_VRAM_DEFAULTS["warp"], step=1, label="Warping Batch Size (lower = less VRAM)")
                         gen_chunk_size = gr.Slider(2, 35, value=_VRAM_DEFAULTS["gen_chunk"], step=1, label="Generation Chunk Size (lower = less VRAM)")
                         m2svid_process_res = gr.Dropdown(
-                            choices=["Native", "1280x720 (Faster)", "1024x576 (Optimal 12GB)", "768x432 (Fastest)"],
-                            value="1024x576 (Optimal 12GB)" if _VRAM_DEFAULTS["gen_chunk"] <= 5 else "Native",
+                            choices=["1024x576 (Optimal 12GB)", "1280x720 (Faster)", "768x432 (Fastest)", "Native"],
+                            value="1024x576 (Optimal 12GB)",
                             label="M2SVid Processing Resolution"
                         )
 
