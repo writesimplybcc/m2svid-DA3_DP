@@ -20,6 +20,9 @@ Requirements:
 import os
 import sys
 
+# Configure PyTorch CUDA memory allocator to prevent memory fragmentation OOM
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 # Ensure UTF-8 stdout/stderr on Windows consoles to prevent charmap UnicodeEncodeErrors with emojis
 if sys.platform == "win32":
     import io

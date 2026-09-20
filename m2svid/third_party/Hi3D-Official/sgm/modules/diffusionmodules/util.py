@@ -273,8 +273,12 @@ class SiLU(nn.Module):
 
 class GroupNorm32(nn.GroupNorm):
     def forward(self, x):
-         # modified: to enable inference in float16
-        super().float()
+        # In PyTorch 2.x, GroupNorm natively supports float16 and bfloat16 on CUDA.
+        # Avoid unnecessary float32 upcasting which allocates 4.2+ GiB per layer during high-res video decoding.
+        if x.dtype in (torch.float16, torch.bfloat16):
+            if self.weight is not None and self.weight.dtype != x.dtype:
+                self.to(dtype=x.dtype)
+            return super().forward(x)
         return super().forward(x.float()).type(x.dtype)
 
 

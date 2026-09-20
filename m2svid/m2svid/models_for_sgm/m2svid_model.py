@@ -313,6 +313,10 @@ class VideoLDM(DiffusionEngine):
                 randn = torch.randn(shape, device=self.device)
                 samples = self.sampler(denoiser, randn, cond=c, uc=uc, num_video_frames=batch["num_video_frames"])
 
+        # Free UNet intermediate allocations and conditioning tensors before VAE decode to maximize free VRAM
+        del randn, c, uc, denoiser, additional_model_inputs, x
+        torch.cuda.empty_cache()
+
         if not do_not_decode:
             samples = self.decode_first_stage(samples.half(), num_video_frames=batch["num_video_frames"])
             samples = einops.rearrange(samples, '(b t) c h w -> b c t h w', t=batch["num_video_frames"])
@@ -321,8 +325,8 @@ class VideoLDM(DiffusionEngine):
             'gt-video': frames,
             # 'reconstructed-gt-video': x_rec,
             'generated-video': samples,
-            'c': c,
-            'uc': uc
+            'c': None,
+            'uc': None
         }
 
         return output
