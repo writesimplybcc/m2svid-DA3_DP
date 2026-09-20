@@ -470,9 +470,27 @@ def run_m2svid_on_pairs(
                 except Exception: pass
             continue
 
-        final_out = FINAL_DIR / f"{stem}_generated_right.mp4"
-        if final_out.exists():
-            SF_LOG.info(f"Skipping {stem}: already processed at {final_out}")
+        out_clip_dir = FINAL_DIR / f"{stem}_stereo"
+        final_out = out_clip_dir / f"{stem}_generated_right.mp4"
+        alt_out = out_clip_dir / "generated_right.mp4"
+        legacy_out = FINAL_DIR / f"{stem}_generated_right.mp4"
+
+        # Organize any files currently outside in final_videos into their clip folder
+        if legacy_out.exists():
+            out_clip_dir.mkdir(parents=True, exist_ok=True)
+            for suffix in ["generated_right.mp4", "stereo_sbs.mp4", "anaglyph.mp4"]:
+                leg_f = FINAL_DIR / f"{stem}_{suffix}"
+                if leg_f.exists():
+                    target_f = out_clip_dir / f"{stem}_{suffix}"
+                    if not target_f.exists():
+                        try:
+                            shutil.move(str(leg_f), str(target_f))
+                            SF_LOG.info(f"Moved {leg_f.name} into {out_clip_dir.name}/")
+                        except Exception as e:
+                            SF_LOG.warning(f"Could not move {leg_f.name} to {target_f}: {e}")
+
+        if final_out.exists() or alt_out.exists():
+            SF_LOG.info(f"Skipping {stem}: already processed at {out_clip_dir}")
             if progress:
                 try: progress(float(i)/max(1,total), desc=f"M2SVid: skipping {stem}, already done")
                 except Exception: pass
@@ -492,22 +510,7 @@ def run_m2svid_on_pairs(
                 continue
 
             if out_dir and os.path.exists(out_dir):
-                try:
-                    src = Path(out_dir) / "generated_right.mp4"
-                    if src.exists():
-                        dst = FINAL_DIR / f"{stem}_generated_right.mp4"
-                        shutil.move(str(src), str(dst))
-                        SF_LOG.info(f"Moved generated_right to {dst}")
-                    src = Path(out_dir) / "stereo_sbs.mp4"
-                    if src.exists():
-                        shutil.move(str(src), str(FINAL_DIR / f"{stem}_stereo_sbs.mp4"))
-                    src = Path(out_dir) / "anaglyph.mp4"
-                    if src.exists():
-                        shutil.move(str(src), str(FINAL_DIR / f"{stem}_anaglyph.mp4"))
-                except Exception as e:
-                    SF_LOG.error(f"Error moving outputs for {stem}: {e}")
-                    import traceback
-                    traceback.print_exc()
+                SF_LOG.info(f"All outputs for {stem} successfully saved in folder: {out_dir}")
             STATE["input_video"] = prev_input
             if progress:
                 try: progress(float(i+1)/max(1,total), desc=f"M2SVid: processed {stem}")
@@ -1446,9 +1449,9 @@ def step2_run_m2svid(
         
         SF_LOG.info(f"Padded output from {w}x{h} to 16:9 standard ({target_w}x{target_h})")
 
-        generated_right = out_dir / "generated_right.mp4"
-        sbs = out_dir / "stereo_sbs.mp4"
-        anaglyph = out_dir / "anaglyph.mp4"
+        generated_right = out_dir / f"{stem}_generated_right.mp4"
+        sbs = out_dir / f"{stem}_stereo_sbs.mp4"
+        anaglyph = out_dir / f"{stem}_anaglyph.mp4"
 
         # Stream write right, SBS, and red/cyan anaglyph videos in a single unified pass
         T_val = padded_left.shape[1]
