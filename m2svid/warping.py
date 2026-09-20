@@ -24,17 +24,19 @@ from pathlib import Path
 import ffmpeg
 import os
 import cv2
+import concurrent.futures
 
 
 def process_video_with_depth(
     video_path,
     depth_path,
-    output_path_reprojected,
-    output_path_mask,
+    output_path_reprojected=None,
+    output_path_mask=None,
     disparity_scale=None,
     disparity_perc=None,
     batch_size=10,
     convergence_point=0.5,
+    return_in_memory=False,
 ):
     relative_depth_data = np.load(depth_path)
     relative_depth = relative_depth_data['depth']
@@ -50,6 +52,20 @@ def process_video_with_depth(
 
     ffmpeg_process_reprojected = None
     ffmpeg_process_mask = None
+
+    all_left = [] if return_in_memory else None
+    all_reproj = [] if return_in_memory else None
+    all_masks = [] if return_in_memory else None
+
+    # Number of worker threads for parallel frame warping
+    max_workers = min(max(batch_size, 1), os.cpu_count() or 4)
+
+    def _warp_single(pair):
+        lf, disp = pair
+        reproj_img, inpaint_mask, _ = scatter_image(
+            lf, disp, direction=-1, scale_factor=1, reproject_depth=False
+        )
+        return reproj_img, inpaint_mask
 
     for i, left_frames in enumerate(
         tqdm.tqdm(
@@ -67,33 +83,33 @@ def process_video_with_depth(
         # Puts the main subject closer to the screen plane, treating the screen like a window
         disparities = (depth_batch - convergence_point) * disparity_scale
 
-        reprojected_right_videos = []
-        reprojected_right_masks = []
+        # Multi-threaded warping across frames in batch
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(_warp_single, zip(left_frames, disparities)))
 
-        for left_frame, disparity in zip(left_frames, disparities):
-            reprojected_image, inpainting_mask, reprojected_depth = scatter_image(
-                left_frame, disparity, direction=-1, scale_factor=1, reproject_depth=True
-            )
-            reprojected_right_videos.append(reprojected_image)
-            reprojected_right_masks.append(inpainting_mask)
+        reprojected_right_videos = np.stack([r[0] for r in results], axis=0)
+        reprojected_right_masks = np.stack([r[1] for r in results], axis=0)
 
-        reprojected_right_videos = np.stack(reprojected_right_videos, axis=0)
-        reprojected_right_masks = np.stack(reprojected_right_masks, axis=0)
+        if return_in_memory:
+            all_left.append(np.array(left_frames))
+            all_reproj.append(reprojected_right_videos)
+            all_masks.append(reprojected_right_masks)
 
-        if ffmpeg_process_reprojected is None:
-            _, height, width, _ = reprojected_right_videos.shape
-            ffmpeg_process_reprojected = open_ffmpeg_process(
-                output_path_reprojected, width, height, fps
-            )
-            ffmpeg_process_mask = open_ffmpeg_process(
-                output_path_mask, width, height, fps, grayscale=True, no_compression=True
-            )
+        if output_path_reprojected is not None and output_path_mask is not None:
+            if ffmpeg_process_reprojected is None:
+                _, h_out, w_out, _ = reprojected_right_videos.shape
+                ffmpeg_process_reprojected = open_ffmpeg_process(
+                    output_path_reprojected, w_out, h_out, fps
+                )
+                ffmpeg_process_mask = open_ffmpeg_process(
+                    output_path_mask, w_out, h_out, fps, grayscale=True, no_compression=True
+                )
 
-        for reprojected_frame, mask_frame in zip(
-            reprojected_right_videos, reprojected_right_masks
-        ):
-            ffmpeg_process_reprojected.stdin.write(reprojected_frame.tobytes())
-            ffmpeg_process_mask.stdin.write(mask_frame.tobytes())
+            for reprojected_frame, mask_frame in zip(
+                reprojected_right_videos, reprojected_right_masks
+            ):
+                ffmpeg_process_reprojected.stdin.write(reprojected_frame.tobytes())
+                ffmpeg_process_mask.stdin.write(mask_frame.tobytes())
 
     if ffmpeg_process_reprojected is not None:
         ffmpeg_process_reprojected.stdin.close()
@@ -102,6 +118,14 @@ def process_video_with_depth(
         ret2 = ffmpeg_process_mask.wait()
         if ret1 != 0 or ret2 != 0:
             raise RuntimeError(f"FFmpeg warping process failed (reprojected={ret1}, mask={ret2})")
+
+    if return_in_memory and all_reproj:
+        reproj_arr = np.concatenate(all_reproj, axis=0)
+        masks_arr = np.concatenate(all_masks, axis=0)
+        left_arr = np.concatenate(all_left, axis=0)
+        return reproj_arr, masks_arr, left_arr, fps
+
+    return None
 
 
 

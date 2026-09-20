@@ -288,37 +288,98 @@ class VideoLDM(DiffusionEngine):
         x = rearrange(frames, 'b c t h w -> (b t) c h w')
         x = x.to(self.device)
 
-        # if not do_not_decode:
-        #     z = self.encode_first_stage(x.half())
-        #     x_rec = self.decode_first_stage(z.half(), num_video_frames=batch["num_video_frames"])
-        #     x_rec = rearrange(x_rec, '(b t) c h w -> b c t h w', t=batch["num_video_frames"])
-        # else:
-        #     x_rec = None
+        # Check if single-pass (CFG bypass) can be used (guidance scale == 1.0)
+        use_single_pass = False
+        if hasattr(self.sampler, "guider"):
+            guider = self.sampler.guider
+            if hasattr(guider, "min_scale") and hasattr(guider, "max_scale"):
+                if guider.min_scale == 1.0 and guider.max_scale == 1.0:
+                    use_single_pass = True
+            elif guider.__class__.__name__ == "IdentityGuider":
+                use_single_pass = True
 
-        additional_model_inputs = {}
-        additional_model_inputs["image_only_indicator"] = torch.zeros(N * 2, batch["num_video_frames"]).to(self.device)
-        additional_model_inputs["num_video_frames"] = batch["num_video_frames"]
+        samples = None
+        if use_single_pass:
+            try:
+                from sgm.modules.diffusionmodules.guiders import IdentityGuider
+                c = self.conditioner(batch)
 
-        if self.cond_reprojected_video:
-            inpainting_mask = batch["inpainting_mask"]
-            inpainting_mask = torch.concat([inpainting_mask, inpainting_mask], dim=0)
-            additional_model_inputs["inpainting_mask"] = inpainting_mask
+                additional_model_inputs = {}
+                additional_model_inputs["image_only_indicator"] = torch.zeros(N, batch["num_video_frames"]).to(self.device)
+                additional_model_inputs["num_video_frames"] = batch["num_video_frames"]
 
-        def denoiser(input, sigma, c):
-            return self.denoiser(self.model, input, sigma, c, **additional_model_inputs)
+                if self.cond_reprojected_video:
+                    additional_model_inputs["inpainting_mask"] = batch["inpainting_mask"]
 
-        with self.ema_scope("Plotting"):
-            with torch.autocast(device_type='cuda', dtype=torch.float16):
-                shape = (x.shape[0], 4, int(x.shape[2] // 8), int(x.shape[3] // 8))
-                randn = torch.randn(shape, device=self.device)
-                samples = self.sampler(denoiser, randn, cond=c, uc=uc, num_video_frames=batch["num_video_frames"])
+                orig_guider = self.sampler.guider
+                self.sampler.guider = IdentityGuider()
+                try:
+                    def denoiser(input, sigma, c):
+                        return self.denoiser(self.model, input, sigma, c, **additional_model_inputs)
 
-        # Free UNet intermediate allocations and conditioning tensors before VAE decode to maximize free VRAM
-        del randn, c, uc, denoiser, additional_model_inputs, x
-        torch.cuda.empty_cache()
+                    with self.ema_scope("Plotting"):
+                        with torch.autocast(device_type='cuda', dtype=torch.float16):
+                            shape = (x.shape[0], 4, int(x.shape[2] // 8), int(x.shape[3] // 8))
+                            randn = torch.randn(shape, device=self.device)
+                            samples = self.sampler(denoiser, randn, cond=c, uc=None, num_video_frames=batch["num_video_frames"])
+                finally:
+                    self.sampler.guider = orig_guider
+                    del randn, c, denoiser, additional_model_inputs, x
+                    torch.cuda.empty_cache()
+
+            except Exception as e:
+                print(f"[M2SVid] ⚠️ Single-pass optimization fallback triggered: {e}. Falling back to standard CFG pass.", flush=True)
+                samples = None
+                torch.cuda.empty_cache()
+                x = rearrange(frames, 'b c t h w -> (b t) c h w').to(self.device)
+
+        if samples is None:
+            # Standard CFG pass (fallback or when scale != 1.0)
+            c, uc = self.conditioner.get_unconditional_conditioning(
+                batch,
+                force_uc_zero_embeddings=ucg_keys if len(self.conditioner.embedders) > 0 else [],
+            )
+            additional_model_inputs = {}
+            additional_model_inputs["image_only_indicator"] = torch.zeros(N * 2, batch["num_video_frames"]).to(self.device)
+            additional_model_inputs["num_video_frames"] = batch["num_video_frames"]
+
+            if self.cond_reprojected_video:
+                inpainting_mask = batch["inpainting_mask"]
+                inpainting_mask = torch.concat([inpainting_mask, inpainting_mask], dim=0)
+                additional_model_inputs["inpainting_mask"] = inpainting_mask
+
+            def denoiser(input, sigma, c):
+                return self.denoiser(self.model, input, sigma, c, **additional_model_inputs)
+
+            with self.ema_scope("Plotting"):
+                with torch.autocast(device_type='cuda', dtype=torch.float16):
+                    shape = (x.shape[0], 4, int(x.shape[2] // 8), int(x.shape[3] // 8))
+                    randn = torch.randn(shape, device=self.device)
+                    samples = self.sampler(denoiser, randn, cond=c, uc=uc, num_video_frames=batch["num_video_frames"])
+
+            del randn, c, uc, denoiser, additional_model_inputs, x
+            torch.cuda.empty_cache()
 
         if not do_not_decode:
-            samples = self.decode_first_stage(samples.half(), num_video_frames=batch["num_video_frames"])
+            try:
+                samples = self.decode_first_stage(samples.half(), num_video_frames=batch["num_video_frames"])
+            except torch.cuda.OutOfMemoryError:
+                # 24GB VRAM fallback: if full chunk decode OOMs, split latents temporally
+                print(f"[M2SVid] ⚠️ VAE Decode OOM detected (common on 24GB GPUs with large chunks). Running chunked VAE decode fallback...", flush=True)
+                torch.cuda.empty_cache()
+                t_total = batch["num_video_frames"]
+                sub_chunk = 8
+                decoded_chunks = []
+                for s_idx in range(0, t_total, sub_chunk):
+                    e_idx = min(s_idx + sub_chunk, t_total)
+                    sub_len = e_idx - s_idx
+                    z_sub = samples.half()[:, s_idx:e_idx] if samples.ndim == 5 else samples.half()[s_idx:e_idx]
+                    out_sub = self.decode_first_stage(z_sub, num_video_frames=sub_len)
+                    decoded_chunks.append(out_sub.cpu())
+                    torch.cuda.empty_cache()
+                samples = torch.cat(decoded_chunks, dim=0).to(self.device)
+                del decoded_chunks
+
             samples = einops.rearrange(samples, '(b t) c h w -> b c t h w', t=batch["num_video_frames"])
 
         output = {

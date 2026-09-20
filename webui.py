@@ -642,11 +642,11 @@ def get_vram_defaults():
     if vram_gb >= 90: # 96GB class (e.g., A100 96GB/Mac 128GB)
         return {"da3": 32, "warp": 16, "vae": 35, "gen_chunk": 35}
     if vram_gb >= 45: # 48GB class (e.g., RTX 6000 Ada / A6000)
-        return {"da3": 16, "warp": 8, "vae": 28, "gen_chunk": 28}
-    if vram_gb >= 30: # 32GB class (e.g., V100 32GB)
-        return {"da3": 12, "warp": 6, "vae": 20, "gen_chunk": 21}
+        return {"da3": 16, "warp": 10, "vae": 28, "gen_chunk": 28}
+    if vram_gb >= 30: # 32GB class (e.g., RTX 5090 / V100 32GB)
+        return {"da3": 12, "warp": 8, "vae": 25, "gen_chunk": 25}
     if vram_gb >= 22: # 24GB class (e.g., RTX 3090 / 4090)
-        return {"da3": 8, "warp": 4, "vae": 14, "gen_chunk": 14}
+        return {"da3": 8, "warp": 4, "vae": 14, "gen_chunk": 16}
     if vram_gb >= 11: # 12GB class (e.g., RTX 3060 / 4070)
         return {"da3": 4, "warp": 2, "vae": 4, "gen_chunk": 5}
         
@@ -1238,8 +1238,8 @@ def step2_run_m2svid(
         reprojected_video = reprojected_dir / "input_reprojected.mp4"
         reprojected_mask = reprojected_dir / "input_reprojected_mask.mp4"
 
-        # We call the existing warping logic directly
-        m2s_process_video_with_depth(
+        # We call the existing warping logic with in-memory handoff
+        warp_res = m2s_process_video_with_depth(
             video_path=str(video_path),
             depth_path=depth_npz_path,
             output_path_reprojected=str(reprojected_video),
@@ -1247,6 +1247,7 @@ def step2_run_m2svid(
             disparity_perc=disparity_perc,
             batch_size=warping_batch_size,
             convergence_point=0.0, # MUST BE 0.0 TO PREVENT UNET GLITCHES!
+            return_in_memory=True,
         )
         SF_LOG.info("Geometric warping complete")
 
@@ -1259,13 +1260,22 @@ def step2_run_m2svid(
         # --- Heavy part: load M2SVid model and run 1-step generation ---
         model = _load_m2svid_model(m2svid_config, m2svid_ckpt)
 
-        # Replicate the exact preprocessing from inpaint_and_refine.py
-        input_video = get_video_frames(video_path)
-        reprojected = get_video_frames(str(reprojected_video))
-        reprojected_mask_arr = get_video_frames(str(reprojected_mask), video_is_grayscale=True)
-
-        probe = ffmpeg.probe(video_path)
-        fps = get_video_fps(video_path, probe)
+        # Use fast in-memory tensors if available, with robust fallback to disk reading
+        if warp_res is not None:
+            in_mem_reproj, in_mem_mask, in_mem_left, fps = warp_res
+            input_video = torch.from_numpy(in_mem_left).permute(0, 3, 1, 2).float() / 255.0
+            reprojected = torch.from_numpy(in_mem_reproj).permute(0, 3, 1, 2).float() / 255.0
+            reprojected_mask_arr = torch.from_numpy(in_mem_mask[:, None, :, :]).float() / 255.0
+            del in_mem_reproj, in_mem_mask, in_mem_left, warp_res
+            SF_LOG.info("Used direct in-memory warping handoff (bypassed disk read)")
+        else:
+            # Fallback to reading from disk
+            input_video = get_video_frames(video_path)
+            reprojected = get_video_frames(str(reprojected_video))
+            reprojected_mask_arr = get_video_frames(str(reprojected_mask), video_is_grayscale=True)
+            probe = ffmpeg.probe(video_path)
+            fps = get_video_fps(video_path, probe)
+            SF_LOG.info("Read warping frames from disk via FFmpeg fallback")
 
         reprojected_mask_arr = apply_closing(reprojected_mask_arr, reprojected_closing_kernel)
         reprojected[reprojected_mask_arr.repeat(1, 3, 1, 1) > 0.5] = 0
