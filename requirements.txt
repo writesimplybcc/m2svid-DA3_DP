@@ -58,6 +58,7 @@ pytorch-msssim>=0.2.1       # Used in m2svid_model.py for MS-SSIM metric during 
 av                          # Required by torchvision.io.write_video for video exports
 decord                      # Required by DepthCrafter for fast video decoding
 diffusers                   # Required by DepthCrafter for model execution
+mediapy                     # Required by DepthCrafter utils
 
 
 # =============================================================================
