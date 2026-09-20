@@ -16,10 +16,23 @@ def get_depthcrafter_model(unet_path="tencent/DepthCrafter"):
     if _cached_depthcrafter_model is None:
         from depthcrafter.inference import DepthCrafterInference
         print("[DepthCrafter] Loading model...")
+        
+        vram_gb = 0.0
+        if torch.cuda.is_available():
+            vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+            
+        # On 20GB+ GPUs (RTX 3090, 4090, 5090, A100), keep model entirely in VRAM
+        # to avoid PCIe weight transfer latency between CPU and GPU
+        offload_strategy = None if vram_gb >= 20.0 else "model"
+        if offload_strategy is None:
+            print(f"[DepthCrafter] High VRAM detected ({vram_gb:.1f} GB). Keeping model in VRAM (cpu_offload=None) for maximum throughput.")
+        else:
+            print(f"[DepthCrafter] VRAM detected ({vram_gb:.1f} GB). Using cpu_offload='model' for safe memory management.")
+            
         _cached_depthcrafter_model = DepthCrafterInference(
             unet_path=unet_path,
             pre_train_path="stabilityai/stable-video-diffusion-img2vid-xt",
-            cpu_offload="model"
+            cpu_offload=offload_strategy
         )
         try:
             if hasattr(_cached_depthcrafter_model.pipe.vae, "enable_slicing"):
@@ -76,6 +89,11 @@ def run_depthcrafter_depth(video_path: str, process_res: int, guidance_scale: fl
                 pass
         return callback_kwargs
 
+    vram_gb = 0.0
+    if torch.cuda.is_available():
+        vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+    adaptive_decode_chunk = 8 if vram_gb >= 20.0 else (4 if vram_gb >= 12.0 else 2)
+
     with torch.inference_mode():
         res = model.pipe(
             frames,
@@ -86,7 +104,7 @@ def run_depthcrafter_depth(video_path: str, process_res: int, guidance_scale: fl
             num_inference_steps=num_inference_steps,
             window_size=window_size,
             overlap=overlap,
-            decode_chunk_size=1,
+            decode_chunk_size=adaptive_decode_chunk,
             track_time=False,
             callback_on_step_end=on_step_end,
         ).frames[0]

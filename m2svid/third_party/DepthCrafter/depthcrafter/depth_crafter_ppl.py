@@ -81,8 +81,10 @@ class DepthCrafterPipeline(StableVideoDiffusionPipeline):
         """
         device = self._execution_device
         video_latents = []
-        # Encode 1 frame at a time to keep VAE activation memory < 800 MB even at 1440p / 4K
-        vae_batch = 1
+        total_vram_gb = 0.0
+        if torch.cuda.is_available():
+            total_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+        vae_batch = 4 if total_vram_gb >= 20.0 else (2 if total_vram_gb >= 12.0 else 1)
         for i in range(0, video.shape[0], vae_batch):
             chunk = video[i : i + vae_batch]
             if chunk.dtype == torch.uint8:
