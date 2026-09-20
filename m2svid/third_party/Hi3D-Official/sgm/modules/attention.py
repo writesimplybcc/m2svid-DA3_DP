@@ -188,10 +188,17 @@ class SelfAttention(nn.Module):
             x = torch.nn.functional.scaled_dot_product_attention(q, k, v)
             x = rearrange(x, "B H L D -> B L (H D)")
         elif self.attn_mode == "xformers":
-            qkv = rearrange(qkv, "B L (K H D) -> K B L H D", K=3, H=self.num_heads)
-            q, k, v = qkv[0], qkv[1], qkv[2]  # B L H D
-            x = xformers.ops.memory_efficient_attention(q, k, v)
-            x = rearrange(x, "B L H D -> B L (H D)", H=self.num_heads)
+            try:
+                qkv = rearrange(qkv, "B L (K H D) -> K B L H D", K=3, H=self.num_heads)
+                q, k, v = qkv[0], qkv[1], qkv[2]  # B L H D
+                x = xformers.ops.memory_efficient_attention(q, k, v)
+                x = rearrange(x, "B L H D -> B L (H D)", H=self.num_heads)
+            except (NotImplementedError, Exception):
+                q = q.transpose(1, 2)
+                k = k.transpose(1, 2)
+                v = v.transpose(1, 2)
+                x = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+                x = rearrange(x, "B H L D -> B L (H D)")
         elif self.attn_mode == "math":
             qkv = rearrange(qkv, "B L (K H D) -> K B H L D", K=3, H=self.num_heads)
             q, k, v = qkv[0], qkv[1], qkv[2]  # B H L D
@@ -414,29 +421,37 @@ class MemoryEfficientCrossAttention(nn.Module):
         )
 
         # actually compute the attention, what we cannot get enough of
-        if version.parse(xformers.__version__) >= version.parse("0.0.21"):
-            # NOTE: workaround for
-            # https://github.com/facebookresearch/xformers/issues/845
-            max_bs = 32768
-            N = q.shape[0]
-            n_batches = math.ceil(N / max_bs)
-            out = list()
-            for i_batch in range(n_batches):
-                batch = slice(i_batch * max_bs, (i_batch + 1) * max_bs)
-                out.append(
-                    xformers.ops.memory_efficient_attention(
-                        q[batch],
-                        k[batch],
-                        v[batch],
-                        attn_bias=None,
-                        op=self.attention_op,
+        try:
+            if version.parse(xformers.__version__) >= version.parse("0.0.21"):
+                # NOTE: workaround for
+                # https://github.com/facebookresearch/xformers/issues/845
+                max_bs = 32768
+                N = q.shape[0]
+                n_batches = math.ceil(N / max_bs)
+                out = list()
+                for i_batch in range(n_batches):
+                    batch = slice(i_batch * max_bs, (i_batch + 1) * max_bs)
+                    out.append(
+                        xformers.ops.memory_efficient_attention(
+                            q[batch],
+                            k[batch],
+                            v[batch],
+                            attn_bias=None,
+                            op=self.attention_op,
+                        )
                     )
+                out = torch.cat(out, 0)
+            else:
+                out = xformers.ops.memory_efficient_attention(
+                    q, k, v, attn_bias=None, op=self.attention_op
                 )
-            out = torch.cat(out, 0)
-        else:
-            out = xformers.ops.memory_efficient_attention(
-                q, k, v, attn_bias=None, op=self.attention_op
-            )
+        except (NotImplementedError, Exception):
+            # Fallback for RTX 5090 / Blackwell (sm_120) or unsupported xformers ops
+            q_sdpa = q.unsqueeze(1)
+            k_sdpa = k.unsqueeze(1)
+            v_sdpa = v.unsqueeze(1)
+            out = torch.nn.functional.scaled_dot_product_attention(q_sdpa, k_sdpa, v_sdpa)
+            out = out.squeeze(1)
 
         # TODO: Use this directly in the attention operation, as a bias
         if exists(mask):

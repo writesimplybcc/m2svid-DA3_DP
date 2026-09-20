@@ -246,9 +246,17 @@ class MemoryEfficientAttnBlock(nn.Module):
             .contiguous(),
             (q, k, v),
         )
-        out = xformers.ops.memory_efficient_attention(
-            q, k, v, attn_bias=None, op=self.attention_op
-        )
+        try:
+            out = xformers.ops.memory_efficient_attention(
+                q, k, v, attn_bias=None, op=self.attention_op
+            )
+        except (NotImplementedError, Exception):
+            # Fallback for RTX 5090 / Blackwell (sm_120) or head_dim > 256
+            q_sdpa = q.unsqueeze(1)
+            k_sdpa = k.unsqueeze(1)
+            v_sdpa = v.unsqueeze(1)
+            out = torch.nn.functional.scaled_dot_product_attention(q_sdpa, k_sdpa, v_sdpa)
+            out = out.squeeze(1)
 
         out = (
             out.unsqueeze(0)
