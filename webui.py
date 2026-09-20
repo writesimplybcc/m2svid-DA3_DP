@@ -418,11 +418,24 @@ def run_depth_on_source_videos(
     )
 
 
-def run_m2svid_on_pairs(m2svid_config, m2svid_ckpt, disparity_perc, convergence_point, closing_kernel, mask_antialias, warping_batch_size, gen_chunk_size, m2svid_process_res, progress=gr.Progress(track_tqdm=True)):
+def run_m2svid_on_pairs(
+    m2svid_config=None,
+    m2svid_ckpt=None,
+    disparity_perc=0.05,
+    convergence_point=0.5,
+    closing_kernel=11,
+    mask_antialias=False,
+    warping_batch_size=None,
+    gen_chunk_size=None,
+    m2svid_process_res="Native",
+    progress=gr.Progress(track_tqdm=True)
+):
     """Process pairs in SOURCE_DIR and DEPTH_DIR and save outputs into FINAL_DIR."""
     SF_LOG.info("Starting batch M2SVid processing on source_videos + depthmaps_videos")
     cfg = m2svid_config or DEFAULT_M2SVID_CONFIG
     ckpt = m2svid_ckpt or DEFAULT_M2SVID_CKPT
+    warping_batch_size = warping_batch_size or _VRAM_DEFAULTS["warp"]
+    gen_chunk_size = gen_chunk_size or _VRAM_DEFAULTS["gen_chunk"]
     vids = sorted([p for p in SOURCE_DIR.iterdir() if p.is_file() and p.suffix.lower() in ('.mp4', '.mov', '.avi', '.mkv')], key=lambda p: p.name)
     total = len(vids)
     SF_LOG.info(f"Found {total} video(s) to process")
@@ -443,6 +456,8 @@ def run_m2svid_on_pairs(m2svid_config, m2svid_ckpt, disparity_perc, convergence_
             candidates = sorted([p for p in DEPTH_DIR.iterdir() if p.is_file() and p.suffix == ".npz" and p.stem.startswith(stem + "_") and "_depth" in p.stem])
             if candidates:
                 depth_npz = candidates[0]
+            else:
+                depth_npz = None
 
         if depth_npz is None:
             SF_LOG.warning(f"M2SVid skipping {stem}: missing depth npz")
@@ -464,6 +479,14 @@ def run_m2svid_on_pairs(m2svid_config, m2svid_ckpt, disparity_perc, convergence_
             STATE["input_video"] = str(vp)
             prefix = f"[{i+1}/{total}: {stem}] "
             status, gen_right, sbs, anaglyph, out_dir = step2_run_m2svid(str(depth_npz), disparity_perc, convergence_point, closing_kernel, mask_antialias, cfg, ckpt, input_video_path=str(vp), warping_batch_size=warping_batch_size, gen_chunk_size=gen_chunk_size, m2svid_process_res=m2svid_process_res, progress=progress, progress_prefix=prefix)
+            if not gen_right or "Error" in status:
+                SF_LOG.error(f"M2SVid failed on {stem}: {status}")
+                STATE["input_video"] = prev_input
+                if "Stopped by user" in status:
+                    SF_LOG.info("Batch M2SVid processing cancelled by user.")
+                    break
+                continue
+
             if out_dir and os.path.exists(out_dir):
                 try:
                     src = Path(out_dir) / "generated_right.mp4"
@@ -1434,7 +1457,7 @@ def step2_run_m2svid(
         clear_cuda()
 
         status = "✅ M2SVid conversion finished. Download the results below."
-        return status, str(generated_right) if os.path.exists(generated_right) else None, str(sbs) if os.path.exists(sbs) else None, str(anaglyph) if anaglyph and os.path.exists(anaglyph) else None, f"Saved to {out_dir.name}"
+        return status, str(generated_right) if os.path.exists(generated_right) else None, str(sbs) if os.path.exists(sbs) else None, str(anaglyph) if anaglyph and os.path.exists(anaglyph) else None, str(out_dir)
 
 
     except Exception as e:

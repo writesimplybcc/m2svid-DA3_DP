@@ -95,10 +95,13 @@ def process_video_with_depth(
             ffmpeg_process_reprojected.stdin.write(reprojected_frame.tobytes())
             ffmpeg_process_mask.stdin.write(mask_frame.tobytes())
 
-    ffmpeg_process_reprojected.stdin.close()
-    ffmpeg_process_reprojected.wait()
-    ffmpeg_process_mask.stdin.close()
-    ffmpeg_process_mask.wait()
+    if ffmpeg_process_reprojected is not None:
+        ffmpeg_process_reprojected.stdin.close()
+        ret1 = ffmpeg_process_reprojected.wait()
+        ffmpeg_process_mask.stdin.close()
+        ret2 = ffmpeg_process_mask.wait()
+        if ret1 != 0 or ret2 != 0:
+            raise RuntimeError(f"FFmpeg warping process failed (reprojected={ret1}, mask={ret2})")
 
 
 
