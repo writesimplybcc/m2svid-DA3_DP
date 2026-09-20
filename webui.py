@@ -957,6 +957,94 @@ def step1_run_da3_depth(
         return f"❌ Error in depth step: {str(e)}", None, None, None
 
 
+class FFmpegVideoWriter:
+    """Streams raw frames directly to an FFmpeg subprocess encoding H.264 MP4.
+    Falls back gracefully to cv2.VideoWriter if FFmpeg CLI is unavailable.
+    """
+    def __init__(self, path: str, width: int, height: int, fps: float, is_color: bool = True, crf: int = 17, preset: str = "fast"):
+        self.path = str(path)
+        self.width = width
+        self.height = height
+        self.fps = max(1.0, float(fps))
+        self.is_color = is_color
+        self.proc = None
+        self.cv2_writer = None
+
+        os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+        if os.path.exists(self.path):
+            try: os.remove(self.path)
+            except Exception: pass
+
+        if shutil.which("ffmpeg"):
+            in_pix_fmt = "rgb24" if is_color else "gray"
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "rawvideo",
+                "-vcodec", "rawvideo",
+                "-s", f"{width}x{height}",
+                "-pix_fmt", in_pix_fmt,
+                "-r", f"{self.fps:.4f}",
+                "-i", "-",
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
+                "-crf", str(crf),
+                "-preset", preset,
+                self.path
+            ]
+            try:
+                self.proc = subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+            except Exception as e:
+                SF_LOG.warning(f"Failed to start ffmpeg subprocess for {path}: {e}")
+                self.proc = None
+
+        if self.proc is None:
+            import cv2
+            fourcc_candidates = [
+                cv2.VideoWriter_fourcc(*"mp4v"),
+                cv2.VideoWriter_fourcc(*"avc1"),
+                cv2.VideoWriter_fourcc(*"X264"),
+            ]
+            for fourcc in fourcc_candidates:
+                w = cv2.VideoWriter(self.path, fourcc, self.fps, (width, height), isColor=is_color)
+                if w.isOpened():
+                    self.cv2_writer = w
+                    break
+                w.release()
+
+    def write(self, frame: np.ndarray):
+        """Writes a single frame: [H, W, 3] RGB if is_color else [H, W] uint8."""
+        if self.proc and self.proc.stdin:
+            self.proc.stdin.write(frame.tobytes())
+        elif self.cv2_writer:
+            import cv2
+            if self.is_color:
+                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                self.cv2_writer.write(frame_bgr)
+            else:
+                self.cv2_writer.write(frame)
+
+    def close(self):
+        if self.proc:
+            try:
+                if self.proc.stdin:
+                    self.proc.stdin.close()
+                self.proc.wait()
+            except Exception:
+                pass
+            self.proc = None
+        if self.cv2_writer:
+            self.cv2_writer.release()
+            self.cv2_writer = None
+
+    def is_valid(self) -> bool:
+        return (self.proc is not None) or (self.cv2_writer is not None)
+
+
 def _create_depth_preview_video(depth: np.ndarray, out_path: str, fps: float):
     """Create a contrast-enhanced grayscale video showing depth for preview.
     
@@ -976,37 +1064,11 @@ def _create_depth_preview_video(depth: np.ndarray, out_path: str, fps: float):
 
     SF_LOG.info(f"Creating depth preview video: {n} frames @ {w}x{h}, {fps} fps -> {out_path}")
 
-    fourcc_candidates = [
-        cv2.VideoWriter_fourcc(*"avc1"), # H.264 (Most browser compatible)
-        cv2.VideoWriter_fourcc(*"X264"),
-        cv2.VideoWriter_fourcc(*"H264"),
-        cv2.VideoWriter_fourcc(*"mp4v"), # Fallback (Will trigger Gradio warning)
-    ]
-
-    writer = None
-    used_fourcc = None
-    for fourcc in fourcc_candidates:
-        trial_path = out_path if writer is None else out_path + ".tmp"
-        writer = cv2.VideoWriter(trial_path, fourcc, fps, (w, h), isColor=False)
-        if writer.isOpened():
-            used_fourcc = fourcc
-            if trial_path != out_path:
-                try:
-                    os.replace(trial_path, out_path)
-                except OSError:
-                    pass
-            break
-        writer.release()
-        writer = None
-
-    if writer is None:
-        raise RuntimeError(
-            f"Failed to open VideoWriter for {out_path} with any codec {fourcc_candidates}. "
-            "Check that ffmpeg is installed and a H.264/MP4 codec is available."
-        )
+    writer = FFmpegVideoWriter(out_path, w, h, fps, is_color=False)
+    if not writer.is_valid():
+        raise RuntimeError(f"Failed to open VideoWriter for {out_path}")
 
     written = 0
-    last_error = None
     try:
         for idx, d in enumerate(depth):
             p_lo = np.percentile(d, 1)
@@ -1020,7 +1082,7 @@ def _create_depth_preview_video(depth: np.ndarray, out_path: str, fps: float):
             frame = (norm * 255).astype(np.uint8)
 
             if frame.shape != (h, w):
-                writer.release()
+                writer.close()
                 raise RuntimeError(
                     f"Frame shape mismatch at frame {idx}: expected ({h},{w}), got {frame.shape}"
                 )
@@ -1028,10 +1090,10 @@ def _create_depth_preview_video(depth: np.ndarray, out_path: str, fps: float):
             writer.write(frame)
             written += 1
     except Exception as e:
-        writer.release()
+        writer.close()
         raise RuntimeError(f"Error writing depth video at frame {written}: {e}") from e
 
-    writer.release()
+    writer.close()
 
     written_bytes = os.path.getsize(out_path) if os.path.exists(out_path) else 0
     SF_LOG.info(f"Depth preview video written: {written}/{n} frames, {written_bytes} bytes")
@@ -1224,38 +1286,19 @@ def step2_run_m2svid(
         SF_LOG.info(f"Video length {T} frames; model.max_frames={num_samples}")
 
         def _save_video(video_tensor, fps_val, path):
-            import numpy as np
-            import cv2
             T_val = video_tensor.shape[2]
-            
-            fourcc_candidates = [
-                cv2.VideoWriter_fourcc(*"avc1"),
-                cv2.VideoWriter_fourcc(*"X264"),
-                cv2.VideoWriter_fourcc(*"H264"),
-                cv2.VideoWriter_fourcc(*"mp4v"),
-            ]
-            
             H, W = video_tensor.shape[3], video_tensor.shape[4]
-            writer = None
-            for fourcc in fourcc_candidates:
-                writer = cv2.VideoWriter(path, fourcc, float(fps_val), (W, H), isColor=True)
-                if writer.isOpened():
-                    break
-                writer.release()
-                writer = None
-                
-            if writer is None:
-                raise RuntimeError(f"Failed to open VideoWriter for {path} with any codec.")
+            writer = FFmpegVideoWriter(path, W, H, fps_val, is_color=True)
+            if not writer.is_valid():
+                raise RuntimeError(f"Failed to open video writer for {path}")
 
             for i in range(T_val):
                 frame = video_tensor[0, :, i, :, :] # [C, H, W]
                 frame = ((frame + 1.0) / 2.0).clamp(0, 1) * 255.0
-                frame = frame.to(torch.uint8).cpu().numpy()
-                frame = frame.transpose(1, 2, 0) # [H, W, C]
-                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                writer.write(frame_bgr)
-                
-            writer.release()
+                frame_np = frame.to(torch.uint8).cpu().numpy().transpose(1, 2, 0)
+                writer.write(frame_np)
+
+            writer.close()
             written = os.path.getsize(path) if os.path.exists(path) else 0
             SF_LOG.info(f"Wrote {written} bytes to {path}")
             if written < 1024:
@@ -1408,60 +1451,43 @@ def step2_run_m2svid(
         anaglyph = out_dir / "anaglyph.mp4"
 
         # Stream write right, SBS, and red/cyan anaglyph videos in a single unified pass
-        import cv2
-        import numpy as np
-        
-        fourcc_candidates = [
-            cv2.VideoWriter_fourcc(*"avc1"),
-            cv2.VideoWriter_fourcc(*"X264"),
-            cv2.VideoWriter_fourcc(*"H264"),
-            cv2.VideoWriter_fourcc(*"mp4v"),
-        ]
-        
         T_val = padded_left.shape[1]
         out_H = padded_left.shape[2]
         out_W = padded_left.shape[3]
-        
-        w_right, w_sbs, w_ana = None, None, None
-        for fourcc in fourcc_candidates:
-            w_right = cv2.VideoWriter(str(generated_right), fourcc, float(fps), (out_W, out_H), isColor=True)
-            w_sbs = cv2.VideoWriter(str(sbs), fourcc, float(fps), (out_W * 2, out_H), isColor=True)
-            w_ana = cv2.VideoWriter(str(anaglyph), fourcc, float(fps), (out_W, out_H), isColor=True)
-            if w_right.isOpened() and w_sbs.isOpened() and w_ana.isOpened():
-                break
-            for w_obj in (w_right, w_sbs, w_ana):
-                if w_obj: w_obj.release()
-            w_right, w_sbs, w_ana = None, None, None
-            
-        if not w_right:
+
+        w_right = FFmpegVideoWriter(str(generated_right), out_W, out_H, fps, is_color=True)
+        w_sbs = FFmpegVideoWriter(str(sbs), out_W * 2, out_H, fps, is_color=True)
+        w_ana = FFmpegVideoWriter(str(anaglyph), out_W, out_H, fps, is_color=True)
+
+        if not (w_right.is_valid() and w_sbs.is_valid() and w_ana.is_valid()):
+            w_right.close()
+            w_sbs.close()
+            w_ana.close()
             raise RuntimeError("Failed to open VideoWriters for stereo output.")
-            
-        SF_LOG.info(f"Streaming {T_val} frames @ {out_W}x{out_H} into stereo video files...")
-        
+
+        SF_LOG.info(f"Streaming {T_val} frames @ {out_W}x{out_H} into stereo video files (H.264 via FFmpeg)...")
+
         for i in range(T_val):
             left_f = padded_left[:, i, :, :].cpu().numpy().transpose(1, 2, 0)
             right_f = padded_right[:, i, :, :].cpu().numpy().transpose(1, 2, 0)
-            
-            left_bgr = cv2.cvtColor(left_f, cv2.COLOR_RGB2BGR)
-            right_bgr = cv2.cvtColor(right_f, cv2.COLOR_RGB2BGR)
-            
+
             # 1. Right eye view
-            w_right.write(right_bgr)
-            
+            w_right.write(right_f)
+
             # 2. Side-by-Side (Left | Right)
-            sbs_bgr = np.concatenate([left_bgr, right_bgr], axis=1)
-            w_sbs.write(sbs_bgr)
-            
+            sbs_f = np.concatenate([left_f, right_f], axis=1)
+            w_sbs.write(sbs_f)
+
             # 3. Red-Cyan Anaglyph: Left Red, Right Green/Blue
-            ana_bgr = np.empty_like(left_bgr)
-            ana_bgr[:, :, 0] = right_bgr[:, :, 0] # Blue from Right
-            ana_bgr[:, :, 1] = right_bgr[:, :, 1] # Green from Right
-            ana_bgr[:, :, 2] = left_bgr[:, :, 2]  # Red from Left
-            w_ana.write(ana_bgr)
-            
-        w_right.release()
-        w_sbs.release()
-        w_ana.release()
+            ana_f = np.empty_like(left_f)
+            ana_f[:, :, 0] = left_f[:, :, 0]   # Red from Left
+            ana_f[:, :, 1] = right_f[:, :, 1]  # Green from Right
+            ana_f[:, :, 2] = right_f[:, :, 2]  # Blue from Right
+            w_ana.write(ana_f)
+
+        w_right.close()
+        w_sbs.close()
+        w_ana.close()
         del padded_left, padded_right
         SF_LOG.info("All stereo video outputs completed successfully.")
 
