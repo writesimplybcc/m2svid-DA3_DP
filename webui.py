@@ -759,18 +759,18 @@ def get_vram_defaults():
     vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
     
     if vram_gb >= 90: # 96GB class (e.g., A100 96GB/Mac 128GB)
-        return {"da3": 32, "warp": 16, "vae": 35, "gen_chunk": 35}
+        return {"da3": 32, "warp": 32, "vae": 14, "gen_chunk": 14}
     if vram_gb >= 45: # 48GB class (e.g., RTX 6000 Ada / A6000)
-        return {"da3": 16, "warp": 10, "vae": 28, "gen_chunk": 28}
+        return {"da3": 16, "warp": 24, "vae": 14, "gen_chunk": 14}
     if vram_gb >= 30: # 32GB class (e.g., RTX 5090 / V100 32GB)
-        return {"da3": 12, "warp": 8, "vae": 25, "gen_chunk": 25}
+        return {"da3": 12, "warp": 16, "vae": 14, "gen_chunk": 14}
     if vram_gb >= 22: # 24GB class (e.g., RTX 3090 / 4090)
-        return {"da3": 8, "warp": 4, "vae": 14, "gen_chunk": 16}
+        return {"da3": 8, "warp": 16, "vae": 14, "gen_chunk": 14}
     if vram_gb >= 11: # 12GB class (e.g., RTX 3060 / 4070)
-        return {"da3": 4, "warp": 2, "vae": 4, "gen_chunk": 5}
+        return {"da3": 4, "warp": 8, "vae": 4, "gen_chunk": 5}
         
     # Fallback for <12GB (e.g., 8GB cards)
-    return {"da3": 2, "warp": 1, "vae": 2, "gen_chunk": 3}
+    return {"da3": 2, "warp": 2, "vae": 2, "gen_chunk": 3}
 
 _VRAM_DEFAULTS = get_vram_defaults()
 _FAST_GPU = False
@@ -1961,7 +1961,7 @@ def create_stereofaster_ui():
                         m2svid_config = gr.Textbox(value=DEFAULT_M2SVID_CONFIG, label="Config Path", visible=False)
                         m2svid_ckpt = gr.Textbox(value=DEFAULT_M2SVID_CKPT, label="Checkpoint Path", visible=False)
                         
-                        warping_batch_size = gr.Slider(1, 16, value=_VRAM_DEFAULTS["warp"], step=1, label="Warping Batch Size (lower = less VRAM)")
+                        warping_batch_size = gr.Slider(1, 64, value=_VRAM_DEFAULTS["warp"], step=1, label="Warping Batch Size (higher = faster parallel warping)")
                         gen_chunk_size = gr.Slider(2, 35, value=_VRAM_DEFAULTS["gen_chunk"], step=1, label="Generation Chunk Size (lower = less VRAM)")
                         m2svid_process_res = gr.Dropdown(
                             choices=["1024x576 (Optimal 12GB)", "1280x720 (Faster)", "768x432 (Fastest)", "Native"],
