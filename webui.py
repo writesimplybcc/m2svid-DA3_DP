@@ -1758,7 +1758,7 @@ def create_stereofaster_ui():
                             ],
                             value="Auto (Adapts to GPU VRAM)",
                             label="CPU Offload",
-                            info="Auto: Full VRAM on >=20GB GPUs (RTX 3090/4090/5090), 'model' on <20GB. 'sequential' enables running on <=8GB GPUs."
+                            info="Auto: Full VRAM on >=45GB GPUs (RTX 6000 Ada/96GB), 'model' on <45GB (RTX 3090/4090/5090) to save ~5GB VRAM. 'sequential' enables running on <=8GB GPUs."
                         )
                         
                         dc_batch_depth_btn = gr.Button("📦 Run Batch Depth Processing on All Source Videos", variant="secondary")

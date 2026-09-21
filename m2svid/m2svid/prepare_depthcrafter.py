@@ -21,7 +21,10 @@ def get_depthcrafter_model(unet_path="tencent/DepthCrafter", cpu_offload="Auto (
         
     cpu_offload_clean = str(cpu_offload).lower()
     if "auto" in cpu_offload_clean:
-        target_offload = None if vram_gb >= 20.0 else "model"
+        # At native 1080p+, UNet activations peak at 15-20GB.
+        # Keeping VAE + text encoder in VRAM (~5GB) causes OOM on 24GB & 32GB GPUs (RTX 3090/4090/5090).
+        # Use "model" offload for <45GB GPUs to free ~5GB VRAM and allow 80-110 frame windows safely.
+        target_offload = None if vram_gb >= 45.0 else "model"
     elif "sequential" in cpu_offload_clean:
         target_offload = "sequential"
     elif "model" in cpu_offload_clean:
