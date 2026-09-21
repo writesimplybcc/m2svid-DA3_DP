@@ -313,7 +313,8 @@ def run_depth_on_source_videos(
     inference_steps=5,
     window_size=30,
     overlap=10,
-    attn_slicing="Auto (Adapts to GPU VRAM)"
+    attn_slicing="Auto (Adapts to GPU VRAM)",
+    cpu_offload="Auto (Adapts to GPU VRAM)"
 ):
     """Process all videos in SOURCE_DIR and save depth .npz and depth_depth.mp4 in DEPTH_DIR if missing."""
     SF_LOG.info(f"Starting batch depth processing with model {model_name} on source_videos directory")
@@ -376,6 +377,7 @@ def run_depth_on_source_videos(
                     window_size=window_size,
                     overlap=overlap,
                     attn_slicing=attn_slicing,
+                    cpu_offload=cpu_offload,
                     progress=progress
                 )
             else:
@@ -808,7 +810,7 @@ def clear_cuda():
 # STEP 1: DA3 Depth Estimation
 # =============================================================================
 
-def step1_run_depthcrafter(video_path: str, process_res: int, guidance_scale: float, inference_steps: int, window_size: int, overlap: int, attn_slicing: str = "Auto (Adapts to GPU VRAM)", progress=gr.Progress(track_tqdm=True)) -> Tuple[str, Optional[str], Optional[str], Optional[str]]:
+def step1_run_depthcrafter(video_path: str, process_res: int, guidance_scale: float, inference_steps: int, window_size: int, overlap: int, attn_slicing: str = "Auto (Adapts to GPU VRAM)", cpu_offload: str = "Auto (Adapts to GPU VRAM)", progress=gr.Progress(track_tqdm=True)) -> Tuple[str, Optional[str], Optional[str], Optional[str]]:
     if not video_path:
         return "No video selected.", None, None, None
     
@@ -837,6 +839,7 @@ def step1_run_depthcrafter(video_path: str, process_res: int, guidance_scale: fl
             window_size=window_size,
             overlap=overlap,
             attn_slicing=attn_slicing,
+            cpu_offload=cpu_offload,
             progress=progress
         )
         
@@ -1746,6 +1749,17 @@ def create_stereofaster_ui():
                             label="Attention Slicing",
                             info="Auto: Disables slicing for maximum speed on 12GB+ GPUs, automatically slices on <=8GB cards or huge workloads."
                         )
+                        dc_cpu_offload = gr.Dropdown(
+                            choices=[
+                                "Auto (Adapts to GPU VRAM)",
+                                "none (Fastest / Full VRAM)",
+                                "model (Balanced / Saves ~4GB VRAM)",
+                                "sequential (Low VRAM / <=8GB GPUs)",
+                            ],
+                            value="Auto (Adapts to GPU VRAM)",
+                            label="CPU Offload",
+                            info="Auto: Full VRAM on >=20GB GPUs (RTX 3090/4090/5090), 'model' on <20GB. 'sequential' enables running on <=8GB GPUs."
+                        )
                         
                         dc_batch_depth_btn = gr.Button("📦 Run Batch Depth Processing on All Source Videos", variant="secondary")
                     with gr.Column(scale=1):
@@ -1914,7 +1928,7 @@ def create_stereofaster_ui():
         # Wire step 1 (DepthCrafter)
         dc_step1_btn.click(
             fn=step1_run_depthcrafter,
-            inputs=[dc_step1_dropdown, dc_max_res, dc_guidance_scale, dc_inference_steps, dc_window_size, dc_overlap, dc_attn_slicing],
+            inputs=[dc_step1_dropdown, dc_max_res, dc_guidance_scale, dc_inference_steps, dc_window_size, dc_overlap, dc_attn_slicing, dc_cpu_offload],
             outputs=[dc_step1_status, preview_depth, dc_depth_file, depth_state],
         )
 
@@ -1972,6 +1986,7 @@ def create_stereofaster_ui():
                 dc_window_size,
                 dc_overlap,
                 dc_attn_slicing,
+                dc_cpu_offload,
             ],
             outputs=[dc_batch_depth_btn, source_dropdown, depth_dropdown, dc_step1_dropdown],
         )

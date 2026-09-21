@@ -10,41 +10,52 @@ if DEPTHCRAFTER_ROOT not in sys.path:
     sys.path.insert(0, DEPTHCRAFTER_ROOT)
 
 _cached_depthcrafter_model = None
+_cached_cpu_offload = None
 
-def get_depthcrafter_model(unet_path="tencent/DepthCrafter"):
-    global _cached_depthcrafter_model
-    if _cached_depthcrafter_model is None:
-        from depthcrafter.inference import DepthCrafterInference
-        print("[DepthCrafter] Loading model...")
+def get_depthcrafter_model(unet_path="tencent/DepthCrafter", cpu_offload="Auto (Adapts to GPU VRAM)"):
+    global _cached_depthcrafter_model, _cached_cpu_offload
+    
+    vram_gb = 0.0
+    if torch.cuda.is_available():
+        vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
         
-        vram_gb = 0.0
-        if torch.cuda.is_available():
-            vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
-            
-        # On 20GB+ GPUs (RTX 3090, 4090, 5090, A100), keep model entirely in VRAM
-        # to avoid PCIe weight transfer latency between CPU and GPU
-        offload_strategy = None if vram_gb >= 20.0 else "model"
-        if offload_strategy is None:
-            print(f"[DepthCrafter] High VRAM detected ({vram_gb:.1f} GB). Keeping model in VRAM (cpu_offload=None) for maximum throughput.")
-        else:
-            print(f"[DepthCrafter] VRAM detected ({vram_gb:.1f} GB). Using cpu_offload='model' for safe memory management.")
-            
-        _cached_depthcrafter_model = DepthCrafterInference(
-            unet_path=unet_path,
-            pre_train_path="stabilityai/stable-video-diffusion-img2vid-xt",
-            cpu_offload=offload_strategy
-        )
-        try:
-            if hasattr(_cached_depthcrafter_model.pipe.vae, "enable_slicing"):
-                _cached_depthcrafter_model.pipe.vae.enable_slicing()
-            if hasattr(_cached_depthcrafter_model.pipe.vae, "enable_tiling"):
-                _cached_depthcrafter_model.pipe.vae.enable_tiling()
-        except Exception as e:
-            print(f"[DepthCrafter] VAE tiling notice: {e}")
+    cpu_offload_clean = str(cpu_offload).lower()
+    if "auto" in cpu_offload_clean:
+        target_offload = None if vram_gb >= 20.0 else "model"
+    elif "sequential" in cpu_offload_clean:
+        target_offload = "sequential"
+    elif "model" in cpu_offload_clean:
+        target_offload = "model"
+    else: # "none" or other
+        target_offload = None
+
+    if _cached_depthcrafter_model is not None and _cached_cpu_offload == target_offload:
+        return _cached_depthcrafter_model
+        
+    if _cached_depthcrafter_model is not None:
+        unload_depthcrafter_model()
+
+    from depthcrafter.inference import DepthCrafterInference
+    print(f"[DepthCrafter] Loading model with cpu_offload={target_offload} (VRAM: {vram_gb:.1f} GB)...")
+    
+    _cached_depthcrafter_model = DepthCrafterInference(
+        unet_path=unet_path,
+        pre_train_path="stabilityai/stable-video-diffusion-img2vid-xt",
+        cpu_offload=target_offload
+    )
+    _cached_cpu_offload = target_offload
+    
+    try:
+        if hasattr(_cached_depthcrafter_model.pipe.vae, "enable_slicing"):
+            _cached_depthcrafter_model.pipe.vae.enable_slicing()
+        if hasattr(_cached_depthcrafter_model.pipe.vae, "enable_tiling"):
+            _cached_depthcrafter_model.pipe.vae.enable_tiling()
+    except Exception as e:
+        print(f"[DepthCrafter] VAE tiling notice: {e}")
     return _cached_depthcrafter_model
 
-def run_depthcrafter_depth(video_path: str, process_res: int, guidance_scale: float = 1.0, num_inference_steps: int = 5, window_size: int = 30, overlap: int = 10, max_frames: int = -1, attn_slicing: str = "Auto (Adapts to GPU VRAM)", progress=None) -> np.ndarray:
-    model = get_depthcrafter_model()
+def run_depthcrafter_depth(video_path: str, process_res: int, guidance_scale: float = 1.0, num_inference_steps: int = 5, window_size: int = 30, overlap: int = 10, max_frames: int = -1, attn_slicing: str = "Auto (Adapts to GPU VRAM)", cpu_offload: str = "Auto (Adapts to GPU VRAM)", progress=None) -> np.ndarray:
+    model = get_depthcrafter_model(cpu_offload=cpu_offload)
     if hasattr(model, "configure_attention_slicing"):
         model.configure_attention_slicing(mode=attn_slicing, window_size=window_size, process_res=process_res)
     
