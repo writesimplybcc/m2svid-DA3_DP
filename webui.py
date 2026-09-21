@@ -559,6 +559,7 @@ def run_m2svid_on_pairs(
     warping_batch_size=None,
     gen_chunk_size=None,
     m2svid_process_res="1024x576 (Optimal 12GB)",
+    gen_batch_size=None,
     progress=gr.Progress(track_tqdm=True)
 ):
     """Process pairs in SOURCE_DIR and DEPTH_DIR and save outputs into FINAL_DIR."""
@@ -572,6 +573,7 @@ def run_m2svid_on_pairs(
     ckpt = m2svid_ckpt or DEFAULT_M2SVID_CKPT
     warping_batch_size = warping_batch_size or _VRAM_DEFAULTS["warp"]
     gen_chunk_size = gen_chunk_size or _VRAM_DEFAULTS["gen_chunk"]
+    gen_batch_size = gen_batch_size or _VRAM_DEFAULTS.get("gen_batch", 1)
     m2svid_process_res = m2svid_process_res or "1024x576 (Optimal 12GB)"
     vids = sorted([p for p in SOURCE_DIR.iterdir() if p.is_file() and p.suffix.lower() in ('.mp4', '.mov', '.avi', '.mkv')], key=lambda p: p.name)
     total = len(vids)
@@ -633,7 +635,7 @@ def run_m2svid_on_pairs(
             prev_input = STATE.get("input_video")
             STATE["input_video"] = str(vp)
             prefix = f"[{i+1}/{total}: {stem}] "
-            status, gen_right, sbs, anaglyph, out_dir = step2_run_m2svid(str(depth_npz), disparity_perc, convergence_point, closing_kernel, mask_antialias, cfg, ckpt, input_video_path=str(vp), warping_batch_size=warping_batch_size, gen_chunk_size=gen_chunk_size, m2svid_process_res=m2svid_process_res, progress=progress, progress_prefix=prefix)
+            status, gen_right, sbs, anaglyph, out_dir = step2_run_m2svid(str(depth_npz), disparity_perc, convergence_point, closing_kernel, mask_antialias, cfg, ckpt, input_video_path=str(vp), warping_batch_size=warping_batch_size, gen_chunk_size=gen_chunk_size, m2svid_process_res=m2svid_process_res, gen_batch_size=gen_batch_size, progress=progress, progress_prefix=prefix)
             if not gen_right or "Error" in status:
                 SF_LOG.error(f"M2SVid failed on {stem}: {status}")
                 STATE["input_video"] = prev_input
@@ -759,18 +761,18 @@ def get_vram_defaults():
     vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
     
     if vram_gb >= 90: # 96GB class (e.g., A100 96GB/Mac 128GB)
-        return {"da3": 32, "warp": 32, "vae": 14, "gen_chunk": 14}
+        return {"da3": 32, "warp": 32, "vae": 14, "gen_chunk": 14, "gen_batch": 2}
     if vram_gb >= 45: # 48GB class (e.g., RTX 6000 Ada / A6000)
-        return {"da3": 16, "warp": 24, "vae": 14, "gen_chunk": 14}
+        return {"da3": 16, "warp": 24, "vae": 14, "gen_chunk": 14, "gen_batch": 2}
     if vram_gb >= 30: # 32GB class (e.g., RTX 5090 / V100 32GB)
-        return {"da3": 12, "warp": 16, "vae": 14, "gen_chunk": 14}
+        return {"da3": 12, "warp": 16, "vae": 14, "gen_chunk": 14, "gen_batch": 2}
     if vram_gb >= 22: # 24GB class (e.g., RTX 3090 / 4090)
-        return {"da3": 8, "warp": 16, "vae": 14, "gen_chunk": 14}
+        return {"da3": 8, "warp": 16, "vae": 14, "gen_chunk": 14, "gen_batch": 1}
     if vram_gb >= 11: # 12GB class (e.g., RTX 3060 / 4070)
-        return {"da3": 4, "warp": 8, "vae": 4, "gen_chunk": 5}
+        return {"da3": 4, "warp": 8, "vae": 4, "gen_chunk": 5, "gen_batch": 1}
         
     # Fallback for <12GB (e.g., 8GB cards)
-    return {"da3": 2, "warp": 2, "vae": 2, "gen_chunk": 3}
+    return {"da3": 2, "warp": 2, "vae": 2, "gen_chunk": 3, "gen_batch": 1}
 
 _VRAM_DEFAULTS = get_vram_defaults()
 _FAST_GPU = False
@@ -1364,6 +1366,7 @@ def step2_run_m2svid(
     warping_batch_size: int = 2,
     gen_chunk_size: int = 14,
     m2svid_process_res: str = "1024x576 (Optimal 12GB)",
+    gen_batch_size: int = 1,
     progress=gr.Progress(track_tqdm=True),
     progress_prefix: str = ""
 ) -> Tuple[str, str, str, str, str]:
@@ -1484,8 +1487,19 @@ def step2_run_m2svid(
 
         num_samples = gen_chunk_size
         T = input_video.shape[1]
-        SF_LOG.info(f"[M2SVid] Configuration: resolution={tw}x{th} (setting='{m2svid_process_res}'), chunk_size={num_samples}, total_frames={T}")
-        print(f"\n[M2SVid] ⚙️ Processing resolution: {tw}x{th} (setting: '{m2svid_process_res}'), Chunk size: {num_samples}, Total frames: {T}")
+
+        # Resolution safety check: Parallel chunk batching is only allowed on non-native resolutions to prevent OOM
+        is_native_res = (m2svid_process_res == "Native")
+        if is_native_res and gen_batch_size > 1:
+            SF_LOG.warning(f"[M2SVid] Parallel chunk batching (batch_size={gen_batch_size}) is only available at non-native resolutions. Automatically reducing to batch_size=1 to prevent Native 1080p OOM.")
+            print(f"\n[M2SVid] ⚠️ Parallel chunk batching ({gen_batch_size}) is only available at non-native resolutions. Automatically using batch_size=1 for Native 1080p to prevent OOM.\n")
+            gen_batch_size = 1
+        elif gen_batch_size > 1:
+            SF_LOG.info(f"[M2SVid] 🚀 Parallel Chunk Batching active: processing {gen_batch_size} chunks simultaneously at {tw}x{th} (~19-22GB VRAM)")
+            print(f"\n[M2SVid] 🚀 Parallel Chunk Batching active: processing {gen_batch_size} chunks simultaneously at {tw}x{th} (~19-22GB VRAM)\n")
+
+        SF_LOG.info(f"[M2SVid] Configuration: resolution={tw}x{th} (setting='{m2svid_process_res}'), chunk_size={num_samples}, chunk_batch_size={gen_batch_size}, total_frames={T}")
+        print(f"\n[M2SVid] ⚙️ Processing resolution: {tw}x{th} (setting: '{m2svid_process_res}'), Chunk size: {num_samples}, Parallel batch: {gen_batch_size}, Total frames: {T}")
 
         if orig_shape[0] != th or orig_shape[1] != tw:
             SF_LOG.info(f"Adjusting inputs for M2SVid from {orig_shape} to {(th, tw)} (must be divisible by 8)")
@@ -1556,53 +1570,69 @@ def step2_run_m2svid(
         else:
             total_chunks = (T + num_samples - 1) // num_samples
             chunk_outputs = []
-            SF_LOG.info(f"Video has {T} frames, using chunking: {total_chunks} chunks (padded to {num_samples} frames each)")
-            for idx in range(total_chunks):
+            SF_LOG.info(f"Video has {T} frames, using chunking: {total_chunks} chunks (padded to {num_samples} frames each, parallel_batch_size={gen_batch_size})")
+            for b_idx in range(0, total_chunks, gen_batch_size):
                 global GLOBAL_CANCEL
                 if GLOBAL_CANCEL:
                     GLOBAL_CANCEL = False
                     raise RuntimeError("Stopped by user. VRAM flushed.")
-                s = idx * num_samples
-                e = min(s + num_samples, T)
-                chunk_len = e - s
-                pad_len = num_samples - chunk_len
-                SF_LOG.info(f"Chunk {idx+1}/{total_chunks}: frames {s}-{e}{f' (padding {pad_len})' if pad_len else ''}")
-                sys.stdout.flush()
-                if pad_len > 0:
-                    input_chunk = torch.nn.functional.pad(input_video[:, s:e, :, :], (0, 0, 0, 0, 0, pad_len))
-                    reproj_chunk = torch.nn.functional.pad(reprojected[:, s:e, :, :], (0, 0, 0, 0, 0, pad_len))
-                    mask_chunk = torch.nn.functional.pad(reprojected_mask_t[:, s:e, :, :], (0, 0, 0, 0, 0, pad_len))
-                else:
-                    input_chunk = input_video[:, s:e, :, :]
-                    reproj_chunk = reprojected[:, s:e, :, :]
-                    mask_chunk = reprojected_mask_t[:, s:e, :, :]
+                
+                curr_batch_chunks = []
+                curr_chunk_lens = []
+                for sub_idx in range(b_idx, min(b_idx + gen_batch_size, total_chunks)):
+                    s = sub_idx * num_samples
+                    e = min(s + num_samples, T)
+                    chunk_len = e - s
+                    pad_len = num_samples - chunk_len
+                    SF_LOG.info(f"Chunk {sub_idx+1}/{total_chunks}: frames {s}-{e}{f' (padding {pad_len})' if pad_len else ''}")
+                    if pad_len > 0:
+                        input_chunk = torch.nn.functional.pad(input_video[:, s:e, :, :], (0, 0, 0, 0, 0, pad_len))
+                        reproj_chunk = torch.nn.functional.pad(reprojected[:, s:e, :, :], (0, 0, 0, 0, 0, pad_len))
+                        mask_chunk = torch.nn.functional.pad(reprojected_mask_t[:, s:e, :, :], (0, 0, 0, 0, 0, pad_len))
+                    else:
+                        input_chunk = input_video[:, s:e, :, :]
+                        reproj_chunk = reprojected[:, s:e, :, :]
+                        mask_chunk = reprojected_mask_t[:, s:e, :, :]
+                    
+                    curr_batch_chunks.append({
+                        "video": input_chunk,
+                        "reprojected_video": reproj_chunk,
+                        "reprojected_mask": mask_chunk,
+                    })
+                    curr_chunk_lens.append(chunk_len)
+
+                B_curr = len(curr_batch_chunks)
                 input_batch = {
-                    "video": input_chunk[None].cuda(),
-                    "video_2nd_view": input_chunk[None].cuda(),
-                    "reprojected_video": reproj_chunk[None].cuda(),
-                    "reprojected_mask": mask_chunk[None].cuda(),
-                    "fps_id": torch.tensor([fps]).cuda(),
-                    "caption": [""],
-                    "motion_bucket_id": torch.tensor([127]).cuda(),
+                    "video": torch.stack([c["video"] for c in curr_batch_chunks], dim=0).cuda(),
+                    "video_2nd_view": torch.stack([c["video"] for c in curr_batch_chunks], dim=0).cuda(),
+                    "reprojected_video": torch.stack([c["reprojected_video"] for c in curr_batch_chunks], dim=0).cuda(),
+                    "reprojected_mask": torch.stack([c["reprojected_mask"] for c in curr_batch_chunks], dim=0).cuda(),
+                    "fps_id": torch.tensor([fps] * B_curr).cuda(),
+                    "caption": [""] * B_curr,
+                    "motion_bucket_id": torch.tensor([127] * B_curr).cuda(),
                 }
                 t0 = time.time()
-                print(f"\n[M2SVid] ⏳ Executing heavy AI generation for Chunk {idx+1}/{total_chunks}... Please wait.")
+                chunk_range_str = f"Chunk(s) {b_idx+1}-{b_idx+B_curr}/{total_chunks}" if B_curr > 1 else f"Chunk {b_idx+1}/{total_chunks}"
+                print(f"\n[M2SVid] ⏳ Executing AI generation for {chunk_range_str} ({B_curr} parallel chunk{'s' if B_curr > 1 else ''})... Please wait.")
                 try:
                     if progress:
-                        progress(0.55 + 0.30 * (idx / total_chunks), desc=f"{progress_prefix}Generating chunk {idx+1}/{total_chunks}...")
+                        progress(0.55 + 0.30 * (b_idx / total_chunks), desc=f"{progress_prefix}Generating {chunk_range_str}...")
                 except TypeError:
                     pass
                 with torch.inference_mode():
-                    gen_chunk = model.generate(input_batch)["generated-video"][0].cpu()
+                    gen_batch = model.generate(input_batch)["generated-video"].cpu()
                 del input_batch
                 clear_cuda()
                 t1 = time.time()
                 sys.stdout.flush()
-                print(f"[M2SVid] ✅ Chunk {idx+1}/{total_chunks} finished in {t1 - t0:.1f} seconds!")
-                SF_LOG.info(f"Chunk {idx+1}/{total_chunks} done in {t1 - t0:.1f}s")
-                if pad_len > 0:
-                    gen_chunk = gen_chunk[:, :chunk_len, :, :]
-                chunk_outputs.append(gen_chunk)
+                print(f"[M2SVid] ✅ {chunk_range_str} finished in {t1 - t0:.1f} seconds!")
+                SF_LOG.info(f"{chunk_range_str} done in {t1 - t0:.1f}s")
+                
+                for b_sub in range(B_curr):
+                    c_len = curr_chunk_lens[b_sub]
+                    gen_chunk = gen_batch[b_sub][:, :c_len, :, :]
+                    chunk_outputs.append(gen_chunk)
+                del gen_batch
                 clear_cuda()
             final_generated = torch.cat(chunk_outputs, dim=1)
             del chunk_outputs
@@ -1963,6 +1993,13 @@ def create_stereofaster_ui():
                         
                         warping_batch_size = gr.Slider(1, 64, value=_VRAM_DEFAULTS["warp"], step=1, label="Warping Batch Size (higher = faster parallel warping)")
                         gen_chunk_size = gr.Slider(2, 35, value=_VRAM_DEFAULTS["gen_chunk"], step=1, label="Generation Chunk Size (lower = less VRAM)")
+                        gen_batch_size = gr.Slider(
+                            1, 4,
+                            value=_VRAM_DEFAULTS.get("gen_batch", 1),
+                            step=1,
+                            label="Parallel Chunk Batch Size (Non-Native Only)",
+                            info="Batches multiple chunks into a single GPU forward pass to saturate 24GB/32GB GPUs (RTX 5090). Only available at non-native resolutions (1024x576, 768x432, 1280x720). Automatically clamped to 1 on Native 1080p to prevent OOM."
+                        )
                         m2svid_process_res = gr.Dropdown(
                             choices=["1024x576 (Optimal 12GB)", "1280x720 (Faster)", "768x432 (Fastest)", "Native"],
                             value="1024x576 (Optimal 12GB)",
@@ -2140,6 +2177,7 @@ def create_stereofaster_ui():
                 warping_batch_size,
                 gen_chunk_size,
                 m2svid_process_res,
+                gen_batch_size,
             ],
             outputs=[step2_status, out_right, out_sbs, out_anaglyph, out_dir_box],
         )
@@ -2170,7 +2208,7 @@ def create_stereofaster_ui():
         )
         batch_m2svid_btn.click(
             fn=run_m2svid_on_pairs,
-            inputs=[m2svid_config, m2svid_ckpt, disparity_perc, convergence_point, closing_kernel, mask_antialias, warping_batch_size, gen_chunk_size, m2svid_process_res],
+            inputs=[m2svid_config, m2svid_ckpt, disparity_perc, convergence_point, closing_kernel, mask_antialias, warping_batch_size, gen_chunk_size, m2svid_process_res, gen_batch_size],
             outputs=[step2_status],
         )
 

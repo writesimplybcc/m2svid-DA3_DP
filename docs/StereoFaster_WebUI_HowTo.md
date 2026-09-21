@@ -112,7 +112,8 @@ Synthesizes the right-eye view through geometric warping and 1-step video diffus
 |---|---|---|---|
 | **M2SVid Processing Resolution** | **`1024x576 (Optimal 12GB)`** *(Sweet Spot)*<br>• `768x432 (Fastest)`<br>• `Native` *(Max Inpainting)* | `1024x576` / `Native` | **Sweet Spot:** `1024x576` only inpaints narrow disocclusion holes and alpha-blends the original 1080p plate everywhere else—giving **100% native sharpness** at 2× speed. Use `768x432` for pure speed (~12–15 fps). |
 | **Generation Chunk Size** | **`14`** *(Fastest & Recommended)* | `14` – `16` | Frames evaluated per inpainting pass. **Keep at `14` for maximum speed:** avoids $O(T^2)$ quadratic temporal attention compute and decodes VAE in 1 fast shot without triggering chunked OOM fallbacks. Max `18`–`20` for Native 1080p. |
-| **Warping Batch Size** | **`16`** | `8` – `12` | Geometric reprojection frame batching. `16` maximizes GPU parallelism, finishing in ~1 second. |
+| **Parallel Chunk Batch Size** | **`2`** *(Non-Native only)* | `1` | **High-VRAM Saturation:** Batches multiple 14-frame chunks into a single GPU forward pass to utilize the RTX 5090's 32GB VRAM (~19–21 GB peak). **Available at non-native resolutions only** (`1024x576`, `768x432`, `1280x720`). Automatically clamped to `1` on Native 1080p to prevent OOM. |
+| **Warping Batch Size** | **`16`** *(up to `64`)* | `8` – `12` | Geometric reprojection frame batching. `16` maximizes GPU parallelism, finishing in ~1 second. |
 | **Disparity Scale** | `0.045` – `0.055` (Default `0.05`) | `0.045` – `0.055` | 3D depth separation. `0.05` is natural and comfortable; higher values increase pop-out. |
 | **Convergence Point (Zero Parallax)** | `0.5` | `0.5` | Sets the screen-plane depth. Main subjects sit flush with the display; foreground pops out, background recedes. |
 | **Mask Closing Kernel** | `11` | `11` | Morphological dilation kernel for disocclusion cleanup. |
