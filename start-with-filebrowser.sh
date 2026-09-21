@@ -31,16 +31,15 @@ if command -v nvidia-smi &> /dev/null; then
     if [ "$COMPUTE_MAJOR" -ge 12 ] 2>/dev/null || [[ "$GPU_NAME" =~ "5090" ]]; then
         echo "⚡ Blackwell architecture detected ($GPU_NAME)."
         
-        # Check installed PyTorch CUDA build
-        CURRENT_CU=$(python3 -c "import torch; print(torch.version.cuda or 'cpu')" 2>/dev/null)
-        echo "Current PyTorch CUDA build: $CURRENT_CU"
+        # Test if PyTorch CUDA is already working properly on sm_120
+        CUDA_OK=$(python3 -c "import torch; print(torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 12)" 2>/dev/null)
 
-        if [[ "$CURRENT_CU" != 12.8* && "$CURRENT_CU" != 12.9* ]]; then
-            echo "⚠️ PyTorch cu128 is required for Blackwell sm_120. Updating PyTorch..."
-            pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-            echo "✅ PyTorch updated to cu128 successfully."
+        if [ "$CUDA_OK" != "True" ]; then
+            echo "⚠️ PyTorch cu128 (sm_120) is required for Blackwell. Installing torch 2.11.0+cu128..."
+            pip install --no-cache-dir torch==2.11.0+cu128 torchvision --index-url https://download.pytorch.org/whl/cu128 --extra-index-url https://pypi.org/simple
+            echo "✅ PyTorch 2.11.0+cu128 installed successfully."
         else
-            echo "✅ Compatible PyTorch cu128 detected."
+            echo "✅ Compatible PyTorch with sm_120 support detected."
         fi
     else
         echo "✅ GPU architecture sm_$COMPUTE_CAP is fully compatible with existing environment."
