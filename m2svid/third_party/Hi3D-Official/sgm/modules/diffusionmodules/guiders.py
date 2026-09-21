@@ -43,7 +43,7 @@ class VanillaCFG(Guider):
 
 
 class IdentityGuider(Guider):
-    def __call__(self, x: torch.Tensor, sigma: float) -> torch.Tensor:
+    def __call__(self, x: torch.Tensor, sigma: float, *args, **kwargs) -> torch.Tensor:
         return x
 
     def prepare_inputs(

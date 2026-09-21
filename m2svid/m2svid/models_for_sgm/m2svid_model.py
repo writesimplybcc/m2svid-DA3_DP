@@ -311,8 +311,12 @@ class VideoLDM(DiffusionEngine):
                 if self.cond_reprojected_video:
                     additional_model_inputs["inpainting_mask"] = batch["inpainting_mask"]
 
+                class SafeIdentityGuider(IdentityGuider):
+                    def __call__(self, x: torch.Tensor, sigma: float, *args, **kwargs) -> torch.Tensor:
+                        return x
+
                 orig_guider = self.sampler.guider
-                self.sampler.guider = IdentityGuider()
+                self.sampler.guider = SafeIdentityGuider()
                 try:
                     def denoiser(input, sigma, c):
                         return self.denoiser(self.model, input, sigma, c, **additional_model_inputs)

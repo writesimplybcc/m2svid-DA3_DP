@@ -46,6 +46,7 @@ import sys
 import tempfile
 import time
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Optional, Tuple
 
