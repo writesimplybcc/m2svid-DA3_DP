@@ -318,6 +318,7 @@ def run_depth_on_source_videos(
 ):
     """Process all videos in SOURCE_DIR and save depth .npz and depth_depth.mp4 in DEPTH_DIR if missing."""
     SF_LOG.info(f"Starting batch depth processing with model {model_name} on source_videos directory")
+    unload_m2svid_model()
     global DEFAULT_DA3_MODEL
     model_name = model_name or DEFAULT_DA3_MODEL
     suffix = get_model_suffix(model_name)
@@ -458,6 +459,11 @@ def run_m2svid_on_pairs(
 ):
     """Process pairs in SOURCE_DIR and DEPTH_DIR and save outputs into FINAL_DIR."""
     SF_LOG.info("Starting batch M2SVid processing on source_videos + depthmaps_videos")
+    try:
+        from m2svid.prepare_depthcrafter import unload_depthcrafter_model
+        unload_depthcrafter_model()
+    except Exception:
+        pass
     cfg = m2svid_config or DEFAULT_M2SVID_CONFIG
     ckpt = m2svid_ckpt or DEFAULT_M2SVID_CKPT
     warping_batch_size = warping_batch_size or _VRAM_DEFAULTS["warp"]
@@ -535,17 +541,20 @@ def run_m2svid_on_pairs(
             if out_dir and os.path.exists(out_dir):
                 SF_LOG.info(f"All outputs for {stem} successfully saved in folder: {out_dir}")
             STATE["input_video"] = prev_input
+            clear_cuda()
             if progress:
                 try: progress(float(i+1)/max(1,total), desc=f"M2SVid: processed {stem}")
                 except Exception: pass
         except Exception as e:
             SF_LOG.error(f"M2SVid error on {stem}: {e}")
             STATE["input_video"] = prev_input
+            clear_cuda()
             if "Stopped by user" in str(e):
                 SF_LOG.info("Batch M2SVid processing cancelled by user.")
                 break
             import traceback
             traceback.print_exc()
+    unload_m2svid_model()
     SF_LOG.info("Batch M2SVid processing complete")
     return "✅ Batch M2SVid processing complete! All outputs saved to final_videos/."
 
@@ -827,6 +836,7 @@ def step1_run_depthcrafter(video_path: str, process_res: int, guidance_scale: fl
     out_mp4 = DEPTH_DIR / f"{stem}_DC_depth.mp4"
     
     try:
+        unload_m2svid_model()
         from m2svid.prepare_depthcrafter import run_depthcrafter_depth
         import cv2
         cap = cv2.VideoCapture(str(vp))
@@ -1161,6 +1171,19 @@ def _create_depth_preview_video(depth: np.ndarray, out_path: str, fps: float):
 _m2svid_model = None  # singleton
 
 
+def unload_m2svid_model():
+    """Unload M2SVid model from GPU VRAM to allow DepthCrafter to have full access to GPU."""
+    global _m2svid_model
+    if _m2svid_model is not None:
+        SF_LOG.info("Unloading M2SVid model from GPU and flushing VRAM...")
+        try:
+            del _m2svid_model
+        except Exception:
+            pass
+        _m2svid_model = None
+    clear_cuda()
+
+
 def _load_m2svid_model(config_path: str, ckpt_path: str):
     global _m2svid_model
     if _m2svid_model is not None:
@@ -1176,9 +1199,11 @@ def _load_m2svid_model(config_path: str, ckpt_path: str):
     config = OmegaConf.load(config_path)
     
     # Dynamically inject VRAM-aware parameters
+    # Cap VAE decode chunk to 14 to prevent massive 13GB VAE activation spikes on native 1080p
     if hasattr(config.model, 'params'):
-        config.model.params.en_and_decode_n_samples_a_time = _VRAM_DEFAULTS['vae']
-        SF_LOG.info(f"Dynamically set VAE decode chunk size to {_VRAM_DEFAULTS['vae']}")
+        vae_chunk = min(_VRAM_DEFAULTS.get('vae', 14), 14)
+        config.model.params.en_and_decode_n_samples_a_time = vae_chunk
+        SF_LOG.info(f"Dynamically set VAE decode chunk size to {vae_chunk}")
         
     model = instantiate_from_config(config.model).cpu()
     model.init_from_ckpt(ckpt_path)
@@ -1231,6 +1256,11 @@ def step2_run_m2svid(
     reprojected_dir.mkdir(parents=True, exist_ok=True)
 
     try:
+        try:
+            from m2svid.prepare_depthcrafter import unload_depthcrafter_model
+            unload_depthcrafter_model()
+        except Exception:
+            pass
         from m2svid.utils.video_utils import get_video_fps, get_total_frames
         from m2svid.data.utils import apply_closing, apply_dilation, get_video_frames
         from m2svid.utils.anaglyph import make_anaglyph_video
