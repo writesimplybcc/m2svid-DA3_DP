@@ -338,7 +338,53 @@ def run_depth_on_source_videos(
     total = len(vids)
     SF_LOG.info(f"Found {total} video(s) in source_videos to process after filtering")
     
-    for i, vp in enumerate(vids):
+    # Pre-scan videos to detect which files already have depth maps (e.g. processed with lower settings)
+    skipped_already_done = []
+    to_process = []
+    for vp in vids:
+        stem = vp.stem
+        out_npz = DEPTH_DIR / f"{stem}{suffix}_depth.npz"
+        out_mp4 = DEPTH_DIR / f"{stem}{suffix}_depth.mp4"
+        if out_npz.exists() and out_mp4.exists():
+            skipped_already_done.append(vp.name)
+        else:
+            to_process.append(vp)
+
+    SF_LOG.info("===============================================================")
+    SF_LOG.info(f"[Batch Depth] 📁 Found {total} total source video(s).")
+    SF_LOG.info(f"[Batch Depth] ⏭️ {len(skipped_already_done)}/{total} video(s) already have existing depth maps (skipped).")
+    SF_LOG.info(f"[Batch Depth] ⏳ {len(to_process)}/{total} video(s) remaining to process with current settings.")
+    SF_LOG.info("===============================================================")
+
+    src = get_source_video_list()
+    dep = get_depth_video_list()
+
+    if total == 0:
+        summary_msg = "ℹ️ No source videos found in source_videos/ directory."
+        SF_LOG.info(summary_msg)
+        return gr.update(), gr.update(choices=[""] + src), gr.update(choices=[""] + dep), gr.update(choices=[""] + src), summary_msg
+
+    if len(to_process) == 0:
+        summary_lines = [
+            "===============================================================",
+            "📊 Batch Depth Processing Summary:",
+            f"• Total source videos: {total}",
+            f"• Skipped (already completed / existing depth): {len(skipped_already_done)}/{total}",
+            f"• Successfully processed in this run: 0/{total}",
+            f"• Skipped due to CUDA OOM: 0/{total}",
+            "ℹ️ All videos already have existing depth maps (skipped). No new videos to process.",
+            "===============================================================",
+        ]
+        summary_msg = "\n".join(summary_lines)
+        for line in summary_lines:
+            SF_LOG.info(line)
+        return gr.update(), gr.update(choices=[""] + src), gr.update(choices=[""] + dep), gr.update(choices=[""] + src), summary_msg
+
+    successful_files = []
+    oom_files = []
+    error_files = []
+
+    for i, vp in enumerate(to_process):
         global GLOBAL_CANCEL
         if GLOBAL_CANCEL:
             GLOBAL_CANCEL = False
@@ -348,14 +394,18 @@ def run_depth_on_source_videos(
         out_npz = DEPTH_DIR / f"{stem}{suffix}_depth.npz"
         out_mp4 = DEPTH_DIR / f"{stem}{suffix}_depth.mp4"
         
+        # Double check in case created during run
         if out_npz.exists() and out_mp4.exists():
+            if vp.name not in skipped_already_done:
+                skipped_already_done.append(vp.name)
             SF_LOG.info(f"Skipping {stem}: depth already exists at {out_npz} and {out_mp4}")
-            if progress:
-                try: progress(float(i)/max(1,total), desc=f"Skipping {stem}, depth exists")
-                except Exception: pass
             continue
             
-        SF_LOG.info(f"Depth processing [{i+1}/{total}]: {stem} using model {model_name}")
+        SF_LOG.info(f"Depth processing [{i+1}/{len(to_process)} of remaining, total {total}]: {stem} using model {model_name}")
+        if progress:
+            try: progress(float(i)/max(1, len(to_process)), desc=f"Processing [{i+1}/{len(to_process)}]: {stem}")
+            except Exception: pass
+            
         try:
             is_depth_pro = "DepthPro" in model_name or "depth-pro" in model_name
             is_depthcrafter = "DepthCrafter" in model_name
@@ -404,27 +454,76 @@ def run_depth_on_source_videos(
             _create_depth_preview_video(depth, str(out_mp4), fps)
             SF_LOG.info(f"Saved depth files: {out_npz} and {out_mp4}")
             
+            successful_files.append(vp.name)
             # Immediately free depth numpy array and flush GPU cache before next video
             del depth
             clear_cuda()
             
             if progress:
-                try: progress(float(i+1)/max(1,total), desc=f"Processed {stem}")
+                try: progress(float(i+1)/max(1, len(to_process)), desc=f"Processed {stem}")
                 except Exception: pass
         except Exception as e:
-            SF_LOG.error(f"Depth error on {stem}: {e}")
-            if "Stopped by user" in str(e):
+            clear_cuda()
+            if is_depthcrafter:
+                try:
+                    from m2svid.prepare_depthcrafter import unload_depthcrafter_model
+                    unload_depthcrafter_model()
+                except Exception:
+                    pass
+                clear_cuda()
+
+            is_oom = isinstance(e, torch.OutOfMemoryError) or "out of memory" in str(e).lower() or "cuda oom" in str(e).lower()
+            if is_oom:
+                oom_files.append(vp.name)
+                SF_LOG.error(f"❌ [CUDA OOM] Skipped {vp.name} due to Out of Memory ({len(oom_files)}/{total} OOM so far).")
+                SF_LOG.error(f"   💡 Recommendation for {vp.name}: Reduce Window Size (e.g. 60 or 40), enable CPU Offload: Model, or lower Resolution.")
+            elif "Stopped by user" in str(e):
                 SF_LOG.info("Batch depth processing cancelled by user.")
                 break
+            else:
+                error_files.append((vp.name, str(e)))
+                SF_LOG.error(f"❌ Error on {vp.name}: {e}")
+                import traceback
+                traceback.print_exc()
+
             if progress:
-                try: progress(float(i+1)/max(1,total), desc=f"Error {stem}")
+                try:
+                    status_desc = f"OOM: {stem}" if is_oom else f"Error: {stem}"
+                    progress(float(i+1)/max(1, len(to_process)), desc=status_desc)
                 except Exception: pass
-            import traceback
-            traceback.print_exc()
+
     SF_LOG.info("Batch depth processing complete")
-    src = get_source_video_list()
-    dep = get_depth_video_list()
     
+    summary_lines = [
+        "===============================================================",
+        "📊 Batch Depth Processing Summary:",
+        f"• Total source videos: {total}",
+        f"• Skipped (already completed / existing depth): {len(skipped_already_done)}/{total}",
+        f"• Successfully processed in this run: {len(successful_files)}/{total}",
+    ]
+    if oom_files:
+        summary_lines.append(f"• ❌ Skipped due to CUDA OOM: {len(oom_files)}/{total}")
+        summary_lines.append("  ⚠️ OOM Video(s):")
+        for f in oom_files:
+            summary_lines.append(f"    - {f}")
+        summary_lines.append("  💡 Recommendations for OOM files:")
+        summary_lines.append("     1. Lower Window Size (e.g. 60 or 40 frames)")
+        summary_lines.append("     2. Set CPU Offload to 'Model'")
+        summary_lines.append("     3. Lower Resolution (e.g. 1080 -> 720)")
+        summary_lines.append("     4. Set Attention Slicing to 'Auto' or 'Enabled'")
+    else:
+        summary_lines.append(f"• Skipped due to CUDA OOM: 0/{total}")
+
+    if error_files:
+        summary_lines.append(f"• ⚠️ Other errors: {len(error_files)}/{total}")
+        for f, err in error_files:
+            summary_lines.append(f"    - {f}: {err[:80]}")
+
+    summary_lines.append("===============================================================")
+    summary_msg = "\n".join(summary_lines)
+    for line in summary_lines:
+        SF_LOG.info(line)
+
     try:
         from m2svid.prepare_da3_depth import unload_da3_model
         unload_da3_model()
@@ -436,12 +535,16 @@ def run_depth_on_source_videos(
     except Exception:
         pass
     clear_cuda()
-    
+
+    src = get_source_video_list()
+    dep = get_depth_video_list()
+
     return (
         gr.update(),
         gr.update(choices=[""] + src),
         gr.update(choices=[""] + dep),
-        gr.update(choices=[""] + src)
+        gr.update(choices=[""] + src),
+        summary_msg
     )
 
 
@@ -865,10 +968,29 @@ def step1_run_depthcrafter(video_path: str, process_res: int, guidance_scale: fl
         STATE["depth_npz"] = str(out_npz)
         return "DepthCrafter estimation complete!", str(out_mp4), str(out_npz), str(out_npz)
     except Exception as e:
+        clear_cuda()
+        try:
+            from m2svid.prepare_depthcrafter import unload_depthcrafter_model
+            unload_depthcrafter_model()
+        except Exception:
+            pass
+        clear_cuda()
+        is_oom = isinstance(e, torch.OutOfMemoryError) or "out of memory" in str(e).lower() or "cuda oom" in str(e).lower()
+        if is_oom:
+            msg = (
+                f"❌ CUDA Out of Memory (OOM) on '{vp.name}'.\n"
+                f"💡 Recommendations for 24GB/32GB GPUs (RTX 5090/4090/3090):\n"
+                f"  • Reduce Window Size (try 60 or 40 instead of {window_size})\n"
+                f"  • Set CPU Offload to 'Model'\n"
+                f"  • Lower Resolution (e.g. 1080 -> 720)\n"
+                f"  • Keep Attention Slicing on 'Auto' or 'Enabled'"
+            )
+            SF_LOG.error(f"[DepthCrafter] {msg}\nDetail: {e}")
+            return msg, None, None, None
         SF_LOG.error(f"DepthCrafter error: {e}")
         import traceback
         traceback.print_exc()
-        return f"Error: {e}", None, None, None
+        return f"❌ Error: {e}", None, None, None
     finally:
         try:
             from m2svid.prepare_depthcrafter import unload_depthcrafter_model
@@ -1002,6 +1124,22 @@ def step1_run_da3_depth(
 
     except Exception as e:
         clear_cuda()
+        try:
+            from m2svid.prepare_da3_depth import unload_da3_model
+            unload_da3_model()
+        except Exception:
+            pass
+        clear_cuda()
+        is_oom = isinstance(e, torch.OutOfMemoryError) or "out of memory" in str(e).lower() or "cuda oom" in str(e).lower()
+        if is_oom:
+            msg = (
+                f"❌ CUDA Out of Memory (OOM) on '{Path(video_path).name}'.\n"
+                f"💡 Recommendations:\n"
+                f"  • Reduce DA3 Resolution (e.g. 720 -> 512)\n"
+                f"  • Lower Batch Size (e.g. {batch_size} -> 1 or 2)"
+            )
+            SF_LOG.error(f"[{model_type_str}] {msg}\nDetail: {e}")
+            return msg, None, None, None
         import traceback
         traceback.print_exc()
         return f"❌ Error in depth step: {str(e)}", None, None, None
@@ -1806,7 +1944,7 @@ def create_stereofaster_ui():
                         )
                         dc_step1_btn = gr.Button("⚡ Estimate Depth for Selected Video", variant="primary", size="lg")
                         dc_step1_stop_btn = gr.Button("🛑 STOP", variant="stop", size="sm")
-                        dc_step1_status = gr.Textbox(label="Estimation Progress", interactive=False)
+                        dc_step1_status = gr.Textbox(label="Estimation Progress", interactive=False, lines=6)
                         dc_depth_file = gr.File(label="Download Depth .npz", type="filepath")
 
             # ===================== STEP 2 =====================
@@ -1870,7 +2008,7 @@ def create_stereofaster_ui():
                         )
                         step1_btn = gr.Button("⚡ Estimate Depth for Selected Video", variant="primary", size="lg")
                         step1_stop_btn = gr.Button("🛑 STOP", variant="stop", size="sm")
-                        step1_status = gr.Textbox(label="Estimation Progress", interactive=False)
+                        step1_status = gr.Textbox(label="Estimation Progress", interactive=False, lines=6)
                         depth_file = gr.File(label="Download Depth .npz", type="filepath")
                         out_dir_box = gr.Textbox(label="Output Directory (all files)", interactive=False)
 
@@ -2022,12 +2160,12 @@ def create_stereofaster_ui():
                 dc_attn_slicing,
                 dc_cpu_offload,
             ],
-            outputs=[dc_batch_depth_btn, source_dropdown, depth_dropdown, dc_step1_dropdown],
+            outputs=[dc_batch_depth_btn, source_dropdown, depth_dropdown, dc_step1_dropdown, dc_step1_status],
         )
         batch_depth_btn.click(
             fn=run_depth_on_source_videos,
             inputs=[da3_model, process_res, batch_size],
-            outputs=[batch_depth_btn, source_dropdown, depth_dropdown, step1_dropdown],
+            outputs=[batch_depth_btn, source_dropdown, depth_dropdown, step1_dropdown, step1_status],
         )
         batch_m2svid_btn.click(
             fn=run_m2svid_on_pairs,
