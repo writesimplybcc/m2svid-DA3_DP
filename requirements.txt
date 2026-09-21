@@ -8,12 +8,11 @@
 # Notes:
 # - PyTorch + CUDA **must** be installed first (before this file).
 # - Recommended versions (as of 2026):
-#     • PyTorch 2.3.1 + CUDA 12.1   → Best balance for both DA3 and M2SVid/sgm
-#     • PyTorch 2.4.x + CUDA 12.1   → Also works well (newer)
+#     • RTX 5090 / Blackwell (sm_120):
+#         pip install torch==2.11.0+cu128 torchvision --index-url https://download.pytorch.org/whl/cu128 --extra-index-url https://pypi.org/simple
+#     • RTX 4090 / 3090 / 6000 Ada / Pro 6000 (sm_89, sm_86, sm_75):
+#         pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/cu121
 #     • CUDA 11.8 users: Use PyTorch 2.0.1 + cu118 (matches original M2SVid env)
-#
-# Install PyTorch first with (CUDA 12.1 example):
-#   pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/cu121
 #
 # Then run:
 #   pip install -r requirements.txt

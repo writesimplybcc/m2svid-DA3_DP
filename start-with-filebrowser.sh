@@ -36,10 +36,16 @@ if command -v nvidia-smi &> /dev/null; then
 
         if [ "$CUDA_OK" != "True" ]; then
             echo "⚠️ PyTorch cu128 (sm_120) is required for Blackwell. Installing torch 2.11.0+cu128..."
+            pip uninstall -y torchaudio 2>/dev/null || true
             pip install --no-cache-dir torch==2.11.0+cu128 torchvision --index-url https://download.pytorch.org/whl/cu128 --extra-index-url https://pypi.org/simple
             echo "✅ PyTorch 2.11.0+cu128 installed successfully."
         else
             echo "✅ Compatible PyTorch with sm_120 support detected."
+            # Ensure leftover broken torchaudio doesn't crash diffusers
+            if python3 -c "import torchaudio" 2>&1 | grep -q "libcudart"; then
+                echo "🧹 Removing broken torchaudio build..."
+                pip uninstall -y torchaudio 2>/dev/null || true
+            fi
         fi
     else
         echo "✅ GPU architecture sm_$COMPUTE_CAP is fully compatible with existing environment."
