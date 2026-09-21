@@ -1663,7 +1663,7 @@ def create_stereofaster_ui():
             </style>
             <div style='text-align: center; padding: 20px; background: linear-gradient(135deg, #101827, #0B2545); border-radius: 12px; margin-bottom: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.05);'>
                 <h1 style='color: #00F5FF; font-family: "Outfit", sans-serif; font-size: 2.8em; margin: 0; text-shadow: 0 0 20px rgba(0,245,255,0.3); font-weight: 800;'>StereoFaster</h1>
-                <p style='color: #8D99AE; font-size: 1.1em; margin-top: 5px; font-weight: 300;'>Premium Multi-Model Depth & Stereoscopy Pipeline</p>
+                <p style='color: #8D99AE; font-size: 1.1em; margin-top: 5px; font-weight: 300;'>DepthCrafter + M2SVid Implementation<br>(Depth Anything V3 and Depth Pro for comparisons)</p>
             </div>
             """
         )
