@@ -378,7 +378,21 @@ class DepthCrafterPipeline(StableVideoDiffusionPipeline):
                 ] * weights + latents_all[:, -overlap:] * (1 - weights)
                 latents_all = torch.cat([latents_all, latents[:, overlap:]], dim=1)
 
+            # Purge window-level tensors and flush cache before next sliding window
+            del latents, video_latents_current, video_embeddings_current
+            if "latent_model_input" in locals():
+                del latent_model_input
+            if "noise_pred" in locals():
+                del noise_pred
+            if "noise_pred_uncond" in locals():
+                del noise_pred_uncond
+            torch.cuda.empty_cache()
+
             idx_start += stride
+
+        # Free all video-level encoder tensors before VAE decode begins
+        del video_latents, video_embeddings, latents_init
+        torch.cuda.empty_cache()
 
         if track_time:
             denoise_event.record()
@@ -391,6 +405,8 @@ class DepthCrafterPipeline(StableVideoDiffusionPipeline):
             if needs_upcasting:
                 self.vae.to(dtype=torch.float16)
             frames = self.decode_latents(latents_all, num_frames, decode_chunk_size)
+            del latents_all
+            torch.cuda.empty_cache()
 
             if track_time:
                 decode_event.record()

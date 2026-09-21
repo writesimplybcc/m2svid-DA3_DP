@@ -106,7 +106,17 @@ def run_depthcrafter_depth(video_path: str, process_res: int, guidance_scale: fl
     vram_gb = 0.0
     if torch.cuda.is_available():
         vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
-    adaptive_decode_chunk = 8 if vram_gb >= 20.0 else (4 if vram_gb >= 12.0 else 2)
+    
+    # At high native resolution (>=1536p), VAE decoding 8 frames consumes >10GB VRAM.
+    # Scale decode chunk size safely to prevent VAE OOM spikes.
+    if vram_gb >= 45.0:
+        adaptive_decode_chunk = 8
+    elif vram_gb >= 20.0:
+        adaptive_decode_chunk = 4 if process_res >= 1536 else 8
+    elif vram_gb >= 12.0:
+        adaptive_decode_chunk = 2 if process_res >= 1536 else 4
+    else:
+        adaptive_decode_chunk = 1 if process_res >= 1536 else 2
 
     with torch.inference_mode():
         res = model.pipe(
@@ -124,6 +134,10 @@ def run_depthcrafter_depth(video_path: str, process_res: int, guidance_scale: fl
         ).frames[0]
         
     res = res.sum(-1) / res.shape[-1]
+    import gc
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     return res
 
 def unload_depthcrafter_model():

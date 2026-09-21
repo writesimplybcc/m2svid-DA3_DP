@@ -403,6 +403,10 @@ def run_depth_on_source_videos(
             _create_depth_preview_video(depth, str(out_mp4), fps)
             SF_LOG.info(f"Saved depth files: {out_npz} and {out_mp4}")
             
+            # Immediately free depth numpy array and flush GPU cache before next video
+            del depth
+            clear_cuda()
+            
             if progress:
                 try: progress(float(i+1)/max(1,total), desc=f"Processed {stem}")
                 except Exception: pass
