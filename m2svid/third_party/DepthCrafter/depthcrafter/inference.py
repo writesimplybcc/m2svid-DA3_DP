@@ -86,10 +86,20 @@ class DepthCrafterInference:
             return
 
         # Adaptive mode ("auto") based on detected hardware:
-        if total_vram_gb >= 20.0:
-            # 24GB+ GPUs (RTX 3090, 4090, 5090, RTX 6000 Ada): no slicing needed, run full speed
-            logger.info(f"[DepthCrafter] High VRAM detected ({total_vram_gb:.1f} GB). Disabling attention slicing for maximum throughput.")
+        if total_vram_gb >= 45.0:
+            # 48GB+ enterprise GPUs (RTX 6000 Ada, A6000, 96GB Blackwell): unconstrained full speed
+            logger.info(f"[DepthCrafter] Enterprise VRAM detected ({total_vram_gb:.1f} GB >= 45GB). Disabling attention slicing for maximum throughput.")
             self.pipe.disable_attention_slicing()
+        elif total_vram_gb >= 20.0:
+            # 24GB - 32GB GPUs (RTX 3090, 4090, 5090):
+            # At native 1080p (process_res >= 1536), baseline model+VAE consumes ~27GB VRAM,
+            # leaving ~3.8GB free on a 32GB card. A window > 60 frames demands a > 4.5GB spike.
+            if process_res >= 1536 and window_size > 60:
+                logger.info(f"[DepthCrafter] High-res native depth ({process_res}p) with window {window_size} on {total_vram_gb:.1f} GB GPU. Enabling 'auto' attention slicing to prevent OOM spike.")
+                self.pipe.enable_attention_slicing("auto")
+            else:
+                logger.info(f"[DepthCrafter] High VRAM detected ({total_vram_gb:.1f} GB) with safe window/res. Disabling attention slicing for maximum throughput.")
+                self.pipe.disable_attention_slicing()
         elif total_vram_gb >= 11.0:
             # 12GB - 16GB GPUs (RTX 3060 12GB, 4070, 4080):
             # To guarantee staying below the ~10.5GB Windows WDDM paging ceiling:

@@ -88,13 +88,15 @@ docker run -d --gpus all \
 
 Estimates continuous, flicker-free video depth using the DepthCrafter video diffusion model.
 
-| Parameter | Recommended (24GB+ GPUs) | Range | Purpose |
-|---|---|---|---|
-| **Max Resolution (Longest Edge)** | **Native** (e.g. `1920`) | 256–3840 | Set equal to your video's longest edge for 1:1 hair & edge preservation. |
-| **Window Size** | `65` – `110` | 10–200 | Temporal sliding window. Balance against resolution to fit within GPU VRAM. |
-| **Inference Steps** | `7` (Speed) / `20–25` (Master) | 1–50 | `7` steps for fast turnaround; `20–25` for pristine edge definition. |
-| **Overlap** | `25` | 0–100 | Frame overlap between consecutive windows to prevent seam artifacts. |
-| **Guidance Scale** | `1.0` | 0.1–10.0 | Classifier-free guidance strength (keep at 1.0 for video depth). |
+| Parameter | Recommended (RTX 5090 32GB) | Recommended (24GB GPUs) | Range | Purpose |
+|---|---|---|---|---|
+| **Max Resolution (Longest Edge)** | **Native** (e.g. `1920`) | **Native** (e.g. `1920`) | 256–3840 | Set equal to your video's longest edge for 1:1 hair & edge preservation. |
+| **Window Size** | **`80`** (Fastest) / **`110`** (w/ Slicing) | **`65` – `75`** | 10–200 | Temporal sliding window. On 5090, `80` runs at 100% speed without slicing; `110` requires attention slicing. |
+| **Inference Steps** | `20–25` (Master) / `5–7` (Fast) | `20–25` (Master) / `5–7` (Fast) | 1–50 | `5–7` steps for rapid turnaround; `20–25` for pristine edge and hair definition. |
+| **Overlap** | `16` – `20` (for Window 80) / `24` (for 110) | `16` – `20` (for Window 75) | 0–100 | Frame overlap between consecutive windows to prevent seam artifacts. |
+| **Guidance Scale** | `1.0` | `1.0` | 0.1–10.0 | Classifier-free guidance strength (keep at 1.0 for video depth). |
+| **Attention Slicing** | **`Disabled`** (for Window 80) / **`Enabled`** (for 110) | `Auto` | Auto / Disabled / Enabled | Chunks attention calculation. Cuts peak allocation by ~50% at a ~5% speed cost. |
+| **CPU Offload** | **`none`** (or `Auto`) | `Auto` / `none` | Auto / none / model / sequential | Offloads VAE/text encoder to system RAM. Frees ~4 GB VRAM on tighter setups. |
 
 - **Outputs:**
   - `depthmaps_videos/<stem>_DC_depth.npz`: Compressed array containing normalized relative disparity.
@@ -106,14 +108,14 @@ Estimates continuous, flicker-free video depth using the DepthCrafter video diff
 
 Synthesizes the right-eye view through geometric warping and 1-step video diffusion inpainting.
 
-| Parameter | Value | Description |
-|---|---|---|
-| **M2SVid Processing Resolution** | **`Native`** | Keeps the AI inpainting pass aligned with your full-resolution source plate. |
-| **Disparity Scale** | `0.045` – `0.055` | 3D depth separation. `0.05` is natural and comfortable; higher values increase pop-out. |
-| **Convergence Point (Zero Parallax)** | `0.5` | Sets the screen-plane depth. Main subjects sit flush with the display; foreground pops out, background recedes. |
-| **Generation Chunk Size** | `10` – `35` | Frames evaluated per inpainting pass. Dynamically scales based on your GPU VRAM tier. |
-| **Warping Batch Size** | `8` – `16` | Geometric reprojection frame batching. |
-| **Mask Closing Kernel** | `11` | Morphological dilation kernel for disocclusion cleanup. |
+| Parameter | Value (RTX 5090 32GB) | Value (General 24GB+) | Description |
+|---|---|---|---|
+| **M2SVid Processing Resolution** | **`Native`** | **`Native`** | Keeps the AI inpainting pass aligned with your full-resolution source plate. |
+| **Disparity Scale** | `0.045` – `0.055` | `0.045` – `0.055` | 3D depth separation. `0.05` is natural and comfortable; higher values increase pop-out. |
+| **Convergence Point (Zero Parallax)** | `0.5` | `0.5` | Sets the screen-plane depth. Main subjects sit flush with the display; foreground pops out, background recedes. |
+| **Generation Chunk Size** | **`20` – `24`** | `14` – `16` | Frames evaluated per inpainting pass. Higher chunk size maximizes temporal consistency across frames. |
+| **Warping Batch Size** | **`16`** | `8` – `12` | Geometric reprojection frame batching. |
+| **Mask Closing Kernel** | `11` | `11` | Morphological dilation kernel for disocclusion cleanup. |
 
 ---
 
@@ -137,7 +139,9 @@ Native Depth (1920):    [Hair Strand] ──► Distinct Latent Tokens ──►
 
 To prevent out-of-memory errors when running native 1080p/1440p depth on cards under 48GB, **trade temporal window size for spatial resolution**:
 - **Do not** drop resolution to 1024 if you care about hair strands.
-- **Do** keep resolution at 1920, and set `Window Size` to `65`–`75` on 24GB/32GB cards.
+- **Do** keep resolution at 1920:
+  - On **24GB cards (RTX 3090/4090)**: set `Window Size` to `65`–`75`.
+  - On **32GB cards (RTX 5090)**: set `Window Size` to `80` (full speed, zero slicing) or `110` (with `Attention Slicing: Auto`).
 
 ---
 
@@ -145,13 +149,13 @@ To prevent out-of-memory errors when running native 1080p/1440p depth on cards u
 
 Diffusion self-attention memory scales quadratically ($O(N^2)$) with spatial tokens, while temporal attention scales with window size. Use this table to achieve **1:1 Native Resolution Depth**:
 
-| GPU Hardware | VRAM | Target Depth Resolution | Window Size | Inference Steps | M2SVid Resolution | Gen Chunk Size |
-|---|---|---|---|---|---|---|
-| **RTX 3060** | 12 GB | `Native` (≤720p) / `1024` (for 1080p)* | 110 (or 50 for native 1080p) | 7 – 20 | `1024x576` / `Native` | 8 – 10 |
-| **RTX 3090 / 4090** | 24 GB | **`1920` (Native 1080p)** | **`65` – `75`** | 20 – 25 | **`Native`** | 14 – 16 |
-| **RTX 5090** | 32 GB | **`1920` – `2048` (Native 1080p/1440p)** | **`75` – `90`** | 20 – 25 | **`Native`** | 18 – 22 |
-| **RTX 6000 Ada** | 48 GB | **`1920` – `2560` (Native 1080p/2K)** | **`110` – `120`** | 25 – 30 | **`Native`** | 24 – 28 |
-| **RTX Pro 6000 / Blackwell** | 96 GB | **`1920` – `3840` (Native 1080p/2K/4K)** | **`110` – `150`** | 25 – 30 | **`Native`** | 32 – 35 |
+| GPU Hardware | VRAM | Target Depth Resolution | Window Size | Inference Steps | M2SVid Resolution | Gen Chunk Size | Warping Batch Size |
+|---|---|---|---|---|---|---|---|
+| **RTX 3060** | 12 GB | `Native` (≤720p) / `1024` (for 1080p)* | 110 (or 50 for native 1080p) | 7 – 20 | `1024x576` / `Native` | 8 – 10 | 2 |
+| **RTX 3090 / 4090** | 24 GB | **`1920` (Native 1080p)** | **`65` – `75`** | 20 – 25 | **`Native`** | 14 – 16 | 8 – 12 |
+| **RTX 5090** | 32 GB | **`1920` – `2048` (Native 1080p/1440p)** | **`80`** (Fastest) / **`110`** (w/ Slicing) | 20 – 25 | **`Native`** | **`20` – `24`** | **`16`** |
+| **RTX 6000 Ada** | 48 GB | **`1920` – `2560` (Native 1080p/2K)** | **`110` – `120`** | 25 – 30 | **`Native`** | 24 – 28 | 16 |
+| **RTX Pro 6000 / Blackwell** | 96 GB | **`1920` – `3840` (Native 1080p/2K/4K)** | **`110` – `150`** | 25 – 30 | **`Native`** | 32 – 35 | 16 |
 
 *\*On RTX 3060 12GB: To achieve native 1920 depth for fine hair on 1080p footage, lower Window Size to `45`–`50`.*
 
@@ -170,9 +174,28 @@ Diffusion self-attention memory scales quadratically ($O(N^2)$) with spatial tok
 - **M2SVid:** Set to `Native`, `Gen Chunk Size = 14–16`. Full 1080p AI inpainting.
 
 #### 3. RTX 5090 (32 GB High-Fidelity Powerhouse)
-- **DepthCrafter:** Set `Max Res = 1920` to `2048` (handles 1440×1080 and 1920×1080 natively), `Window Size = 75–90`, `Inference Steps = 25`.
-- **VRAM Footprint:** ~26–28 GB GDDR7.
-- **M2SVid:** Set to `Native`, `Gen Chunk Size = 18–22`. Fast parallel inpainting with full temporal cross-attention (`m2svid.yaml`).
+- **Architecture & VRAM:** Blackwell `sm_120`, 32 GB GDDR7 @ 1,792 GB/s. Target 80–90% VRAM saturation (~25–28 GB) without hitting PyTorch CUDA OOM.
+- **DepthCrafter (Step 1):**
+  - **Max Resolution:** **`Native`** (e.g. `1920` for 1080p, `2048` for 2K). Preserves 1:1 micro-geometry, hair strands, and razor-sharp depth boundaries.
+  - **Option A: Pure Speed / Zero Slicing:**
+    - `Window Size = 60`, `Overlap = 12–15`, `Inference Steps = 20–25`.
+    - `Attention Slicing: Disabled`, `CPU Offload: none`.
+    - **Memory Profile:** Baseline model + VAE holds ~27.6 GB, leaving 3.76 GB free. A 60-frame attention spike is ~3.57 GB, fitting safely inside the 31.36 GB headroom with zero paging at **100% unconstrained hardware speed**.
+  - **Option B: Maximum Context & Stability (Window 80–110 — Recommended):**
+    - `Window Size = 80` (or `110`), `Overlap = 16–24`, `Inference Steps = 20–25`.
+    - **`Attention Slicing: Auto`** (or `Enabled`).
+    - **Why:** An 80-frame window at 1920x832 demands a **4.76 GiB spike**, which exceeds the 3.76 GB headroom without slicing. Slicing drops the spike from 4.76 GiB down to **~2.2 GiB**, running 80 or 110 frames effortlessly with only a ~5% speed difference.
+    - *Note:* In StereoFaster, `Attention Slicing: Auto` now automatically detects `process_res >= 1536` and `window_size > 60` on 32GB GPUs to prevent this OOM automatically.
+- **M2SVid (Step 2):**
+  - **Processing Resolution:** **`Native`** (keeps full 1080p source plate fidelity).
+  - **Generation Chunk Size:** **`20` – `24`** (takes full advantage of 32 GB VRAM for maximum temporal continuity across frames).
+  - **Warping Batch Size:** **`16`** (fastest parallel reprojection).
+  - **Disparity Scale:** `0.045` – `0.055` (default `0.05`).
+  - **Convergence Point:** `0.5` (zero parallax subject lock).
+  - **Config:** Automatically loads `m2svid.yaml` (full temporal cross-attention).
+- **Environment & Drivers:**
+  - Requires `torch==2.11.0+cu128` (CUDA 12.8/12.9) for native `sm_120` support.
+  - Automatically runs with `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` to eliminate memory fragmentation.
 
 #### 4. RTX 6000 Ada (48 GB Enterprise Mastering)
 - **DepthCrafter:** Set `Max Res = 1920` to `2560`, `Window Size = 110–120`, `Inference Steps = 25–30`.
@@ -235,5 +258,25 @@ All processed files are output to `final_videos/<stem>_stereo/`:
 
 ### Q: How do I make sure a strand of hair pops out in 3D?
 - Set **Max Resolution** in Step 1 equal to your video's native resolution (e.g. `1920` for 1080p).
-- On 24GB / 32GB GPUs, set **Window Size** to `65`–`75`.
+- Set **Window Size**:
+  - On **24GB GPUs (RTX 3090/4090)**: `65`–`75`.
+  - On **32GB GPUs (RTX 5090)**: `80` (or `110` with `Attention Slicing: Auto`).
 - In Step 2, keep **M2SVid Processing Resolution** set to **`Native`**.
+
+### Q: Why did DepthCrafter give `CUDA out of memory` (OOM) on an RTX 5090?
+- **Root Cause:** At native 1080p ($1920 \times 1080$ / $1920 \times 832$), DepthCrafter's baseline model, VAE, and initial cache occupy ~27.59 GB of VRAM, leaving **3.76 GB of free headroom** on a 32 GB card.
+- When running an 80-frame window, the temporal attention and feed-forward layer (`self.ff` / GeLU activation) demands a **4.76 GiB spike** ($4.76 > 3.76$ GiB free by ~1.0 GiB), crashing with CUDA OOM.
+- **The Solution:**
+  1. **Option A (Recommended — Window 80 to 110 with Attention Slicing):**
+     - Set **`Attention Slicing = Auto`** (or `Enabled`).
+     - StereoFaster's updated `Auto` logic now detects $1920\text{p}$ + window $> 60$ on 24GB/32GB cards and automatically slices attention heads, reducing the 4.76 GiB spike down to **~2.2 GiB** (fits easily in 3.76 GB free with zero OOM and only a ~5% speed difference).
+  2. **Option B (CPU Offload):**
+     - Set **`CPU Offload = model`** in the WebUI. This offloads the VAE and text encoder to system RAM during UNet execution, freeing **~4.0 GB of VRAM** and expanding free headroom to **~7.7 GB**.
+  3. **Option C (Pure Speed / Zero Slicing / Zero Offload):**
+     - Set **`Window Size = 60`** (Overlap: `12–15`). At 60 frames, the spike drops to **~3.57 GiB**, fitting inside the 3.76 GiB headroom without slicing.
+
+### Q: What PyTorch version is required for RTX 5090 (Blackwell `sm_120`)?
+- Standard PyTorch builds (`cu121`, `cu124`, `cu126`) only support architectures up to `sm_90` (Hopper) and will throw `UserWarning: sm_120 is not compatible`.
+- Unpinned `pip install torch ... cu128` can pull CUDA 13 wheels (`2.14.0+cu130`), which fail with `The NVIDIA driver on your system is too old (found version 12090)`.
+- **The Working Build:** Pin `torch==2.11.0+cu128 torchvision==0.22.0+cu128 --index-url https://download.pytorch.org/whl/cu128`.
+- If `torchaudio` causes a `libcudart.so.13` error on launch, run `pip uninstall -y torchaudio` (StereoFaster does not require audio libraries).
