@@ -1283,11 +1283,10 @@ class FFmpegVideoWriter:
 
 
 def _create_depth_preview_video(depth: np.ndarray, out_path: str, fps: float):
-    """Create a contrast-enhanced grayscale video showing depth for preview.
+    """Create a contrast-enhanced grayscale video showing depth for preview and archiving.
     
-    Uses per-frame 1st/99th percentile stretching so that both near and far
-    objects are clearly visible, even when the depth range is highly skewed
-    (e.g. Depth Pro inverse-depth where most values cluster near zero).
+    Uses global normalization across the video to preserve true temporal consistency across frames,
+    vectorized NumPy scaling, and fast bulk GPU NVENC streaming.
     """
     if depth.size == 0:
         raise RuntimeError("Cannot create preview video: depth array is empty")
@@ -1299,7 +1298,7 @@ def _create_depth_preview_video(depth: np.ndarray, out_path: str, fps: float):
     if w <= 0 or h <= 0:
         raise RuntimeError(f"Cannot create preview video: invalid frame size {w}x{h}")
 
-    SF_LOG.info(f"Creating depth preview video: {n} frames @ {w}x{h}, {fps} fps -> {out_path}")
+    SF_LOG.info(f"Creating depth video: {n} frames @ {w}x{h}, {fps} fps -> {out_path}")
 
     writer = FFmpegVideoWriter(out_path, w, h, fps, is_color=False)
     if not writer.is_valid():
@@ -1307,33 +1306,29 @@ def _create_depth_preview_video(depth: np.ndarray, out_path: str, fps: float):
 
     written = 0
     try:
-        for idx, d in enumerate(depth):
-            p_lo = np.percentile(d, 1)
-            p_hi = np.percentile(d, 99)
-            if p_hi - p_lo < 1e-6:
-                p_lo = d.min()
-                p_hi = d.max()
-            if p_hi - p_lo < 1e-6:
-                p_hi = p_lo + 1
-            norm = np.clip((d - p_lo) / (p_hi - p_lo), 0, 1)
-            frame = (norm * 255).astype(np.uint8)
+        # Fast global normalization (preserves 1:1 temporal consistency for future NPZ rebuilds)
+        d_min = float(depth.min())
+        d_max = float(depth.max())
+        denom = (d_max - d_min) if (d_max - d_min) > 1e-6 else 1.0
+        frames_u8 = np.clip((depth - d_min) / denom, 0, 1)
+        frames_u8 = (frames_u8 * 255.0).astype(np.uint8)
 
-            if frame.shape != (h, w):
-                writer.close()
-                raise RuntimeError(
-                    f"Frame shape mismatch at frame {idx}: expected ({h},{w}), got {frame.shape}"
-                )
-
-            writer.write(frame)
-            written += 1
+        # Fast bulk write to FFmpeg stdin (NVENC GPU accelerated)
+        if writer.proc and writer.proc.stdin:
+            writer.proc.stdin.write(frames_u8.tobytes())
+            written = n
+        else:
+            for frame in frames_u8:
+                writer.write(frame)
+                written += 1
     except Exception as e:
         writer.close()
-        raise RuntimeError(f"Error writing depth video at frame {written}: {e}") from e
+        raise RuntimeError(f"Error writing depth video: {e}") from e
 
     writer.close()
 
     written_bytes = os.path.getsize(out_path) if os.path.exists(out_path) else 0
-    SF_LOG.info(f"Depth preview video written: {written}/{n} frames, {written_bytes} bytes")
+    SF_LOG.info(f"Depth video written: {written}/{n} frames, {written_bytes} bytes")
 
     if written < n:
         # Partial write; the video may not play correctly
