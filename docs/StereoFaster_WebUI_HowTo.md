@@ -192,8 +192,10 @@ Diffusion self-attention memory scales quadratically ($O(N^2)$) with spatial tok
   - **Profile A: Sweet Spot (Max Quality & Speed — Recommended):**
     - **Processing Resolution:** **`1024x576 (Optimal 12GB)`** (Inpaints disocclusion holes at 576p and alpha-blends the native 1080p source plate everywhere else for 100% sharp visuals at 2× speed).
     - **Generation Chunk Size:** **`14`** (~1.2s/chunk, avoids $O(T^2)$ quadratic temporal penalty, 1-shot VAE decode).
-    - **Warping Batch Size:** **`16`** (max GPU parallelism).
-    - **Throughput:** **~8–10 fps** (~5–6s for 57 frames; ~7 mins for 3-minute video; ~11 GB peak VRAM).
+    - **Parallel Chunk Batch Size:** **`3`** (Saturates ~24–26 GB VRAM on the RTX 5090, processing 3 chunks simultaneously).
+    - **Warping Batch Size:** **`32`** (max GPU parallelism).
+    - **Video Export:** **GPU NVENC Hardware Encoder (`h264_nvenc`)** with bulk DMA transfers, reducing multi-stream video export from ~20s to ~2s per clip.
+    - **Throughput:** **~12–15 fps** (~22–25 GB peak VRAM).
   - **Profile B: Absolute Fastest Throughput:**
     - **Processing Resolution:** **`768x432 (Fastest)`**, **Generation Chunk Size:** **`14`**, **Warping Batch:** **`16`**.
     - **Throughput:** **~12–15 fps** (~3.5s for 57 frames; ~4.5 mins for 3-minute video; ~8 GB peak VRAM).

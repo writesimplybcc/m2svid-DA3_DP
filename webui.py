@@ -761,13 +761,13 @@ def get_vram_defaults():
     vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
     
     if vram_gb >= 90: # 96GB class (e.g., A100 96GB/Mac 128GB)
-        return {"da3": 32, "warp": 32, "vae": 14, "gen_chunk": 14, "gen_batch": 2}
+        return {"da3": 32, "warp": 32, "vae": 14, "gen_chunk": 14, "gen_batch": 4}
     if vram_gb >= 45: # 48GB class (e.g., RTX 6000 Ada / A6000)
-        return {"da3": 16, "warp": 24, "vae": 14, "gen_chunk": 14, "gen_batch": 2}
+        return {"da3": 16, "warp": 32, "vae": 14, "gen_chunk": 14, "gen_batch": 3}
     if vram_gb >= 30: # 32GB class (e.g., RTX 5090 / V100 32GB)
-        return {"da3": 12, "warp": 16, "vae": 14, "gen_chunk": 14, "gen_batch": 2}
+        return {"da3": 12, "warp": 32, "vae": 14, "gen_chunk": 14, "gen_batch": 3}
     if vram_gb >= 22: # 24GB class (e.g., RTX 3090 / 4090)
-        return {"da3": 8, "warp": 16, "vae": 14, "gen_chunk": 14, "gen_batch": 1}
+        return {"da3": 8, "warp": 32, "vae": 14, "gen_chunk": 14, "gen_batch": 2}
     if vram_gb >= 11: # 12GB class (e.g., RTX 3060 / 4070)
         return {"da3": 4, "warp": 8, "vae": 4, "gen_chunk": 5, "gen_batch": 1}
         
@@ -1148,9 +1148,27 @@ def step1_run_da3_depth(
         return f"❌ Error in depth step: {str(e)}", None, None, None
 
 
+_NVENC_AVAILABLE = None
+
+def _check_nvenc_available() -> bool:
+    global _NVENC_AVAILABLE
+    if _NVENC_AVAILABLE is None:
+        if not torch.cuda.is_available() or not shutil.which("ffmpeg"):
+            _NVENC_AVAILABLE = False
+        else:
+            try:
+                res = subprocess.run(["ffmpeg", "-encoders"], capture_output=True, text=True, timeout=5)
+                _NVENC_AVAILABLE = "h264_nvenc" in res.stdout
+            except Exception:
+                _NVENC_AVAILABLE = False
+        if _NVENC_AVAILABLE:
+            SF_LOG.info("🚀 NVIDIA NVENC hardware encoder detected and enabled for video export.")
+    return _NVENC_AVAILABLE
+
+
 class FFmpegVideoWriter:
     """Streams raw frames directly to an FFmpeg subprocess encoding H.264 MP4.
-    Falls back gracefully to cv2.VideoWriter if FFmpeg CLI is unavailable.
+    Uses GPU-accelerated h264_nvenc when available, with automatic fallback to libx264 and cv2.VideoWriter.
     """
     def __init__(self, path: str, width: int, height: int, fps: float, is_color: bool = True, crf: int = 17, preset: str = "fast"):
         self.path = str(path)
@@ -1168,30 +1186,58 @@ class FFmpegVideoWriter:
 
         if shutil.which("ffmpeg"):
             in_pix_fmt = "rgb24" if is_color else "gray"
-            cmd = [
-                "ffmpeg", "-y",
-                "-f", "rawvideo",
-                "-vcodec", "rawvideo",
-                "-s", f"{width}x{height}",
-                "-pix_fmt", in_pix_fmt,
-                "-r", f"{self.fps:.4f}",
-                "-i", "-",
-                "-c:v", "libx264",
-                "-pix_fmt", "yuv420p",
-                "-crf", str(crf),
-                "-preset", preset,
-                self.path
-            ]
-            try:
-                self.proc = subprocess.Popen(
-                    cmd,
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
-            except Exception as e:
-                SF_LOG.warning(f"Failed to start ffmpeg subprocess for {path}: {e}")
-                self.proc = None
+            use_nvenc = _check_nvenc_available()
+
+            def _build_cmd(encoder_type):
+                if encoder_type == "nvenc":
+                    codec_args = [
+                        "-c:v", "h264_nvenc",
+                        "-pix_fmt", "yuv420p",
+                        "-cq", str(crf),
+                        "-preset", "p4",
+                    ]
+                else:
+                    codec_args = [
+                        "-c:v", "libx264",
+                        "-pix_fmt", "yuv420p",
+                        "-crf", str(crf),
+                        "-preset", preset,
+                    ]
+                return [
+                    "ffmpeg", "-y",
+                    "-f", "rawvideo",
+                    "-vcodec", "rawvideo",
+                    "-s", f"{width}x{height}",
+                    "-pix_fmt", in_pix_fmt,
+                    "-r", f"{self.fps:.4f}",
+                    "-i", "-",
+                    *codec_args,
+                    self.path
+                ]
+
+            if use_nvenc:
+                try:
+                    self.proc = subprocess.Popen(
+                        _build_cmd("nvenc"),
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                except Exception as e:
+                    SF_LOG.warning(f"NVENC start failed ({e}), falling back to libx264")
+                    self.proc = None
+
+            if self.proc is None:
+                try:
+                    self.proc = subprocess.Popen(
+                        _build_cmd("libx264"),
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                except Exception as e:
+                    SF_LOG.warning(f"Failed to start ffmpeg subprocess for {path}: {e}")
+                    self.proc = None
 
         if self.proc is None:
             import cv2
@@ -1717,9 +1763,14 @@ def step2_run_m2svid(
 
         SF_LOG.info(f"Streaming {T_val} frames @ {out_W}x{out_H} into stereo video files (H.264 via FFmpeg)...")
 
+        # Single bulk DMA transfer to host memory (avoids T_val separate GPU pipeline stalls)
+        padded_left_np = padded_left.permute(1, 2, 3, 0).contiguous().cpu().numpy()
+        padded_right_np = padded_right.permute(1, 2, 3, 0).contiguous().cpu().numpy()
+        del padded_left, padded_right
+
         for i in range(T_val):
-            left_f = padded_left[:, i, :, :].cpu().numpy().transpose(1, 2, 0)
-            right_f = padded_right[:, i, :, :].cpu().numpy().transpose(1, 2, 0)
+            left_f = padded_left_np[i]
+            right_f = padded_right_np[i]
 
             # 1. Right eye view
             w_right.write(right_f)
@@ -1738,7 +1789,7 @@ def step2_run_m2svid(
         w_right.close()
         w_sbs.close()
         w_ana.close()
-        del padded_left, padded_right
+        del padded_left_np, padded_right_np
         SF_LOG.info("All stereo video outputs completed successfully.")
 
         if progress:
