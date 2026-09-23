@@ -1401,8 +1401,13 @@ def sync_orphan_depth_mp4s():
                 SF_LOG.error(f"[Auto-Sync] Failed to convert {mp4.name} to npz: {e}")
 
 
-def generate_title_desaturation_depth(source_stem: str, progress=gr.Progress(track_tqdm=True)):
-    """Generate clean, artifact-free depth for flat 2D title cards on black backgrounds using pure desaturation."""
+def generate_title_desaturation_depth(
+    source_stem: str,
+    auto_bg: bool = True,
+    invert_depth: bool = False,
+    progress=gr.Progress(track_tqdm=True)
+):
+    """Generate clean, artifact-free depth for flat 2D title cards on any solid background (black, white, green screen, etc.) using desaturation & color distance keying."""
     if not source_stem:
         return "No source clip selected.", None, gr.update(), None
     
@@ -1416,7 +1421,7 @@ def generate_title_desaturation_depth(source_stem: str, progress=gr.Progress(tra
     if not video_path.exists():
         return f"Source video '{source_stem}' not found in source_videos/", None, gr.update(), None
 
-    SF_LOG.info(f"[Title Desaturation] Processing '{source_stem}'...")
+    SF_LOG.info(f"[Title Desaturation] Processing '{source_stem}' (auto_bg={auto_bg}, invert={invert_depth})...")
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         return f"Cannot open video: {video_path}", None, gr.update(), None
@@ -1426,14 +1431,37 @@ def generate_title_desaturation_depth(source_stem: str, progress=gr.Progress(tra
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    frames = []
+    depth_frames = []
     f_idx = 0
+    corner_size = max(5, min(15, min(w, h) // 20))
+
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        frames.append(gray)
+        
+        if auto_bg:
+            # Sample 4 corners to detect the solid background color
+            corners = [
+                frame[:corner_size, :corner_size],
+                frame[:corner_size, -corner_size:],
+                frame[-corner_size:, :corner_size],
+                frame[-corner_size:, -corner_size:]
+            ]
+            bg_color = np.median(np.concatenate([c.reshape(-1, 3) for c in corners], axis=0), axis=0)
+            # Chebyshev (max channel) color distance from solid background
+            diff = np.max(np.abs(frame.astype(np.float32) - bg_color), axis=-1)
+            # Noise threshold eliminates video compression macroblocking in solid background
+            mask = diff > 12.0
+            depth_f = np.zeros((h, w), dtype=np.float32)
+            depth_f[mask] = np.clip((diff[mask] - 12.0) / (255.0 - 12.0), 0.0, 1.0)
+        else:
+            depth_f = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+
+        if invert_depth:
+            depth_f = np.clip(1.0 - depth_f, 0.0, 1.0)
+
+        depth_frames.append(depth_f)
         f_idx += 1
         if progress and f_idx % 10 == 0:
             try:
@@ -1442,10 +1470,11 @@ def generate_title_desaturation_depth(source_stem: str, progress=gr.Progress(tra
                 pass
     cap.release()
 
-    if not frames:
+    if not depth_frames:
         return "No frames decoded from video.", None, gr.update(), None
 
-    depth = np.stack(frames, axis=0).astype(np.float32) / 255.0
+    depth = np.stack(depth_frames, axis=0).astype(np.float32)
+    depth = np.clip(depth, 0.0, 1.0)
 
     out_npz = DEPTH_DIR / f"{source_stem}_depth.npz"
     out_mp4 = DEPTH_DIR / f"{source_stem}_depth.mp4"
@@ -1453,7 +1482,7 @@ def generate_title_desaturation_depth(source_stem: str, progress=gr.Progress(tra
     save_m2svid_compatible_npz(depth, str(out_npz))
     _create_depth_preview_video(depth, str(out_mp4), fps)
 
-    msg = f"✅ Flat Title Depth created: {len(frames)} frames ({w}x{h}) saved to {out_npz.name} and {out_mp4.name}."
+    msg = f"✅ Flat Title Depth created: {len(depth_frames)} frames ({w}x{h}) saved to {out_npz.name} and {out_mp4.name}."
     SF_LOG.info(msg)
     dep_list = get_depth_video_list()
     return msg, str(out_mp4), gr.update(choices=[""] + dep_list, value=out_mp4.stem), str(out_npz)
@@ -1461,12 +1490,14 @@ def generate_title_desaturation_depth(source_stem: str, progress=gr.Progress(tra
 
 def generate_3d_title_isolation_depth(
     source_stem: str,
-    color_target: str = "Red (Claymation)",
+    color_target: str = "Universal (Auto Solid BG)",
     base_elevation: float = 0.60,
     relief_scale: float = 0.32,
+    auto_bg: bool = True,
+    invert_depth: bool = False,
     progress=gr.Progress(track_tqdm=True)
 ):
-    """Generate 3D depth for sculpted or claymation title cards on black backgrounds using color isolation & surface relief."""
+    """Generate 3D depth for sculpted or claymation title cards on any solid background using color isolation & surface relief."""
     if not source_stem:
         return "No source clip selected.", None, gr.update(), None
 
@@ -1480,7 +1511,7 @@ def generate_3d_title_isolation_depth(
     if not video_path.exists():
         return f"Source video '{source_stem}' not found in source_videos/", None, gr.update(), None
 
-    SF_LOG.info(f"[3D Title Isolation] Processing '{source_stem}' with target '{color_target}', base={base_elevation}, relief={relief_scale}...")
+    SF_LOG.info(f"[3D Title Isolation] Processing '{source_stem}' with target '{color_target}', base={base_elevation}, relief={relief_scale}, auto_bg={auto_bg}, invert={invert_depth}...")
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         return f"Cannot open video: {video_path}", None, gr.update(), None
@@ -1492,6 +1523,8 @@ def generate_3d_title_isolation_depth(
 
     depth_frames = []
     f_idx = 0
+    corner_size = max(5, min(15, min(w, h) // 20))
+
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -1506,6 +1539,15 @@ def generate_3d_title_isolation_depth(
             diff = np.clip(g_f - np.maximum(r_f, b_f), 0, 255)
         elif "Blue" in color_target:
             diff = np.clip(b_f - np.maximum(r_f, g_f), 0, 255)
+        elif "Universal" in color_target and auto_bg:
+            corners = [
+                frame[:corner_size, :corner_size],
+                frame[:corner_size, -corner_size:],
+                frame[-corner_size:, :corner_size],
+                frame[-corner_size:, -corner_size:]
+            ]
+            bg_color = np.median(np.concatenate([c.reshape(-1, 3) for c in corners], axis=0), axis=0)
+            diff = np.max(np.abs(frame.astype(np.float32) - bg_color), axis=-1)
         else: # Universal Luminance
             diff = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
 
@@ -1517,6 +1559,9 @@ def generate_3d_title_isolation_depth(
             depth_f = np.where(mask, float(base_elevation) + float(relief_scale) * norm_relief, 0.0).astype(np.float32)
         else:
             depth_f = np.zeros((h, w), dtype=np.float32)
+
+        if invert_depth:
+            depth_f = np.clip(1.0 - depth_f, 0.0, 1.0)
 
         depth_frames.append(depth_f)
         f_idx += 1
@@ -2181,8 +2226,8 @@ def create_stereofaster_ui():
                             format="mp4"
                         )
                         
-                        with gr.Accordion("🎬 Title Depth Tools (Black Background Void)", open=False):
-                            gr.Markdown("Generate instant, artifact-free depth maps for title cards and logos on black backgrounds without AI.")
+                        with gr.Accordion("🎬 Title Depth Tools (Solid Background Void)", open=False):
+                            gr.Markdown("Generate instant, artifact-free depth maps for title cards and logos on any solid background (black, white, green screen, blue screen, etc.) without AI.")
                             with gr.Tab("🔲 Title Desaturation (Flat 2D Titles)"):
                                 desat_clip_dropdown = gr.Dropdown(
                                     choices=[""] + stems,
@@ -2190,6 +2235,9 @@ def create_stereofaster_ui():
                                     label="Select Title Clip (from source_videos/)",
                                     interactive=True
                                 )
+                                with gr.Row():
+                                    desat_auto_bg = gr.Checkbox(label="Auto-Detect Solid Background Color (Keys out Black, White, Green, etc.)", value=True)
+                                    desat_invert = gr.Checkbox(label="Invert Depth (Reverses near/far)", value=False)
                                 desat_gen_btn = gr.Button("🔲 Generate Flat Title Depth", variant="primary")
                                 desat_status = gr.Textbox(label="Status", interactive=False, lines=2)
                             with gr.Tab("🏺 3D Title Isolation (Sculpted / Claymation)"):
@@ -2201,10 +2249,13 @@ def create_stereofaster_ui():
                                 )
                                 with gr.Row():
                                     iso_color_target = gr.Dropdown(
-                                        choices=["Red (Claymation)", "Green", "Blue", "Universal Luminance"],
-                                        value="Red (Claymation)",
-                                        label="Target Color"
+                                        choices=["Universal (Auto Solid BG)", "Red (Claymation)", "Green", "Blue", "Universal Luminance"],
+                                        value="Universal (Auto Solid BG)",
+                                        label="Target Color / Isolation Mode"
                                     )
+                                with gr.Row():
+                                    iso_auto_bg = gr.Checkbox(label="Auto-Detect Solid Background Color", value=True)
+                                    iso_invert = gr.Checkbox(label="Invert Depth (Reverses near/far)", value=False)
                                 with gr.Row():
                                     iso_base_elev = gr.Slider(0.0, 1.0, value=0.60, step=0.05, label="Base Elevation", info="Floating plane height")
                                     iso_relief = gr.Slider(0.0, 0.5, value=0.32, step=0.02, label="Surface Relief Scale", info="Sculpted contour depth")
@@ -2490,13 +2541,13 @@ def create_stereofaster_ui():
         # Wire Title Depth Tools
         desat_gen_btn.click(
             fn=generate_title_desaturation_depth,
-            inputs=[desat_clip_dropdown],
+            inputs=[desat_clip_dropdown, desat_auto_bg, desat_invert],
             outputs=[desat_status, preview_depth, depth_dropdown, depth_input],
         )
 
         iso_gen_btn.click(
             fn=generate_3d_title_isolation_depth,
-            inputs=[iso_clip_dropdown, iso_color_target, iso_base_elev, iso_relief],
+            inputs=[iso_clip_dropdown, iso_color_target, iso_base_elev, iso_relief, iso_auto_bg, iso_invert],
             outputs=[iso_status, preview_depth, depth_dropdown, depth_input],
         )
 
