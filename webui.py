@@ -260,6 +260,11 @@ def convert_depth_video_to_npz(video_path: str, out_npz_path: str):
         frames.append(gray)
     cap.release()
     depth = np.stack(frames, axis=0).astype(np.float32)
+    if depth.max() > 1.0:
+        d_min = float(depth.min())
+        d_max = float(depth.max())
+        denom = (d_max - d_min) if (d_max - d_min) > 1e-6 else 1.0
+        depth = (depth - d_min) / denom
     save_m2svid_compatible_npz(depth, out_npz_path)
 
 
@@ -599,6 +604,31 @@ def run_m2svid_on_pairs(
                 depth_npz = None
 
         if depth_npz is None:
+            # Check if an orphan depth MP4 exists (e.g. uploaded via FileBrowser or kept for space saving)
+            mp4_candidates = [
+                DEPTH_DIR / f"{stem}_DC_depth.mp4",
+                DEPTH_DIR / f"{stem}_depth.mp4",
+            ]
+            if DEPTH_DIR.exists():
+                for p in sorted(DEPTH_DIR.glob(f"{stem}_*_depth.mp4")):
+                    if p not in mp4_candidates:
+                        mp4_candidates.append(p)
+            found_mp4 = None
+            for mc in mp4_candidates:
+                if mc.exists():
+                    found_mp4 = mc
+                    break
+            if found_mp4:
+                target_npz = found_mp4.parent / f"{found_mp4.name.rsplit('.', 1)[0]}.npz"
+                try:
+                    SF_LOG.info(f"[Batch M2SVid] Auto-converting {found_mp4.name} -> {target_npz.name} for {stem}")
+                    convert_depth_video_to_npz(str(found_mp4), str(target_npz))
+                    if target_npz.exists():
+                        depth_npz = target_npz
+                except Exception as e:
+                    SF_LOG.error(f"Failed to auto-convert {found_mp4.name} to npz: {e}")
+
+        if depth_npz is None:
             SF_LOG.warning(f"M2SVid skipping {stem}: missing depth npz")
             if progress:
                 try: progress(float(i)/max(1,total), desc=f"M2SVid: missing depth for {stem}")
@@ -890,25 +920,36 @@ def select_source_video(stem):
     depth_mp4 = None
     
     # Priority order: DepthCrafter -> Legacy/standard -> other model-tagged depths
-    candidates = [
-        DEPTH_DIR / f"{stem}_DC_depth",
-        DEPTH_DIR / f"{stem}_depth",
+    base_stems = [
+        f"{stem}_DC_depth",
+        f"{stem}_depth",
     ]
     if DEPTH_DIR.exists():
         for p in sorted(DEPTH_DIR.glob(f"{stem}_*_depth.*")):
-            base = p.with_suffix("")
-            if base not in candidates:
-                candidates.append(base)
+            b_name = p.name.rsplit(".", 1)[0]
+            if b_name not in base_stems:
+                base_stems.append(b_name)
                 
-    for cand in candidates:
-        npz = cand.with_suffix(".npz")
-        mp4 = cand.with_suffix(".mp4")
+    for b_stem in base_stems:
+        npz = DEPTH_DIR / f"{b_stem}.npz"
+        mp4 = DEPTH_DIR / f"{b_stem}.mp4"
         if depth_npz is None and npz.exists():
             depth_npz = npz
         if depth_mp4 is None and mp4.exists():
             depth_mp4 = mp4
         if depth_npz and depth_mp4:
             break
+
+    # Auto-convert if depth MP4 exists but NPZ is missing (e.g. uploaded via FileBrowser or kept for space saving)
+    if depth_mp4 and not depth_npz:
+        target_npz = depth_mp4.parent / f"{depth_mp4.name.rsplit('.', 1)[0]}.npz"
+        try:
+            SF_LOG.info(f"Auto-converting orphan depth video {depth_mp4.name} -> {target_npz.name}")
+            convert_depth_video_to_npz(str(depth_mp4), str(target_npz))
+            if target_npz.exists():
+                depth_npz = target_npz
+        except Exception as e:
+            SF_LOG.error(f"Failed to auto-convert {depth_mp4.name} to npz: {e}")
     
     return (
         str(video_path) if video_path.exists() else None,
@@ -1344,6 +1385,164 @@ def _create_depth_preview_video(depth: np.ndarray, out_path: str, fps: float):
             f"Depth preview video is suspiciously small ({written_bytes} bytes). "
             f"Removed file: {out_path}"
         )
+
+
+def sync_orphan_depth_mp4s():
+    """Scan depthmaps_videos/ and auto-convert any .mp4 depth videos that lack an .npz file."""
+    if not DEPTH_DIR.exists():
+        return
+    for mp4 in sorted(DEPTH_DIR.glob("*_depth.mp4")):
+        npz = mp4.parent / f"{mp4.name.rsplit('.', 1)[0]}.npz"
+        if not npz.exists():
+            try:
+                SF_LOG.info(f"[Auto-Sync] Found orphan depth video {mp4.name}. Auto-converting to {npz.name}...")
+                convert_depth_video_to_npz(str(mp4), str(npz))
+            except Exception as e:
+                SF_LOG.error(f"[Auto-Sync] Failed to convert {mp4.name} to npz: {e}")
+
+
+def generate_title_desaturation_depth(source_stem: str, progress=gr.Progress(track_tqdm=True)):
+    """Generate clean, artifact-free depth for flat 2D title cards on black backgrounds using pure desaturation."""
+    if not source_stem:
+        return "No source clip selected.", None, gr.update(), None
+    
+    video_path = SOURCE_DIR / f"{source_stem}.mp4"
+    if not video_path.exists():
+        for ext in ('.mov', '.avi', '.mkv'):
+            alt = SOURCE_DIR / f"{source_stem}{ext}"
+            if alt.exists():
+                video_path = alt
+                break
+    if not video_path.exists():
+        return f"Source video '{source_stem}' not found in source_videos/", None, gr.update(), None
+
+    SF_LOG.info(f"[Title Desaturation] Processing '{source_stem}'...")
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return f"Cannot open video: {video_path}", None, gr.update(), None
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 24.0
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    frames = []
+    f_idx = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        frames.append(gray)
+        f_idx += 1
+        if progress and f_idx % 10 == 0:
+            try:
+                progress(f_idx / total_frames, desc=f"Desaturating: frame {f_idx}/{total_frames}")
+            except Exception:
+                pass
+    cap.release()
+
+    if not frames:
+        return "No frames decoded from video.", None, gr.update(), None
+
+    depth = np.stack(frames, axis=0).astype(np.float32) / 255.0
+
+    out_npz = DEPTH_DIR / f"{source_stem}_depth.npz"
+    out_mp4 = DEPTH_DIR / f"{source_stem}_depth.mp4"
+
+    save_m2svid_compatible_npz(depth, str(out_npz))
+    _create_depth_preview_video(depth, str(out_mp4), fps)
+
+    msg = f"✅ Flat Title Depth created: {len(frames)} frames ({w}x{h}) saved to {out_npz.name} and {out_mp4.name}."
+    SF_LOG.info(msg)
+    dep_list = get_depth_video_list()
+    return msg, str(out_mp4), gr.update(choices=[""] + dep_list, value=out_mp4.stem), str(out_npz)
+
+
+def generate_3d_title_isolation_depth(
+    source_stem: str,
+    color_target: str = "Red (Claymation)",
+    base_elevation: float = 0.60,
+    relief_scale: float = 0.32,
+    progress=gr.Progress(track_tqdm=True)
+):
+    """Generate 3D depth for sculpted or claymation title cards on black backgrounds using color isolation & surface relief."""
+    if not source_stem:
+        return "No source clip selected.", None, gr.update(), None
+
+    video_path = SOURCE_DIR / f"{source_stem}.mp4"
+    if not video_path.exists():
+        for ext in ('.mov', '.avi', '.mkv'):
+            alt = SOURCE_DIR / f"{source_stem}{ext}"
+            if alt.exists():
+                video_path = alt
+                break
+    if not video_path.exists():
+        return f"Source video '{source_stem}' not found in source_videos/", None, gr.update(), None
+
+    SF_LOG.info(f"[3D Title Isolation] Processing '{source_stem}' with target '{color_target}', base={base_elevation}, relief={relief_scale}...")
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return f"Cannot open video: {video_path}", None, gr.update(), None
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 24.0
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    depth_frames = []
+    f_idx = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        
+        b, g, r = cv2.split(frame)
+        b_f, g_f, r_f = b.astype(np.float32), g.astype(np.float32), r.astype(np.float32)
+
+        if "Red" in color_target:
+            diff = np.clip(r_f - np.maximum(g_f, b_f), 0, 255)
+        elif "Green" in color_target:
+            diff = np.clip(g_f - np.maximum(r_f, b_f), 0, 255)
+        elif "Blue" in color_target:
+            diff = np.clip(b_f - np.maximum(r_f, g_f), 0, 255)
+        else: # Universal Luminance
+            diff = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
+
+        mask = diff > 15.0
+        text_vals = diff[mask]
+        if len(text_vals) > 0:
+            max_v = max(float(np.percentile(text_vals, 99)), 30.0)
+            norm_relief = np.clip(diff / max_v, 0.0, 1.0)
+            depth_f = np.where(mask, float(base_elevation) + float(relief_scale) * norm_relief, 0.0).astype(np.float32)
+        else:
+            depth_f = np.zeros((h, w), dtype=np.float32)
+
+        depth_frames.append(depth_f)
+        f_idx += 1
+        if progress and f_idx % 10 == 0:
+            try:
+                progress(f_idx / total_frames, desc=f"Isolating 3D Title: frame {f_idx}/{total_frames}")
+            except Exception:
+                pass
+    cap.release()
+
+    if not depth_frames:
+        return "No frames decoded from video.", None, gr.update(), None
+
+    depth = np.stack(depth_frames, axis=0).astype(np.float32)
+    depth = np.clip(depth, 0.0, 1.0)
+
+    out_npz = DEPTH_DIR / f"{source_stem}_depth.npz"
+    out_mp4 = DEPTH_DIR / f"{source_stem}_depth.mp4"
+
+    save_m2svid_compatible_npz(depth, str(out_npz))
+    _create_depth_preview_video(depth, str(out_mp4), fps)
+
+    msg = f"✅ 3D Title Depth created: {len(depth_frames)} frames ({w}x{h}) saved to {out_npz.name} and {out_mp4.name}."
+    SF_LOG.info(msg)
+    dep_list = get_depth_video_list()
+    return msg, str(out_mp4), gr.update(choices=[""] + dep_list, value=out_mp4.stem), str(out_npz)
 
 
 # =============================================================================
@@ -1981,6 +2180,36 @@ def create_stereofaster_ui():
                             interactive=False,
                             format="mp4"
                         )
+                        
+                        with gr.Accordion("🎬 Title Depth Tools (Black Background Void)", open=False):
+                            gr.Markdown("Generate instant, artifact-free depth maps for title cards and logos on black backgrounds without AI.")
+                            with gr.Tab("🔲 Title Desaturation (Flat 2D Titles)"):
+                                desat_clip_dropdown = gr.Dropdown(
+                                    choices=[""] + stems,
+                                    value=default_stem,
+                                    label="Select Title Clip (from source_videos/)",
+                                    interactive=True
+                                )
+                                desat_gen_btn = gr.Button("🔲 Generate Flat Title Depth", variant="primary")
+                                desat_status = gr.Textbox(label="Status", interactive=False, lines=2)
+                            with gr.Tab("🏺 3D Title Isolation (Sculpted / Claymation)"):
+                                iso_clip_dropdown = gr.Dropdown(
+                                    choices=[""] + stems,
+                                    value=default_stem,
+                                    label="Select Title Clip (from source_videos/)",
+                                    interactive=True
+                                )
+                                with gr.Row():
+                                    iso_color_target = gr.Dropdown(
+                                        choices=["Red (Claymation)", "Green", "Blue", "Universal Luminance"],
+                                        value="Red (Claymation)",
+                                        label="Target Color"
+                                    )
+                                with gr.Row():
+                                    iso_base_elev = gr.Slider(0.0, 1.0, value=0.60, step=0.05, label="Base Elevation", info="Floating plane height")
+                                    iso_relief = gr.Slider(0.0, 0.5, value=0.32, step=0.02, label="Surface Relief Scale", info="Sculpted contour depth")
+                                iso_gen_btn = gr.Button("🏺 Generate 3D Sculpted Title Depth", variant="primary")
+                                iso_status = gr.Textbox(label="Status", interactive=False, lines=2)
 
             # ===================== STEP 1 (NEW DEPTHCRAFTER) =====================
             with gr.Tab("🚀 Step 1 — DepthCrafter Estimation"):
@@ -2117,12 +2346,12 @@ def create_stereofaster_ui():
             if v_p:
                 preset_val, res_val, preview_crop = analyze_letterbox(v_p)
                 
-            return v_p, d_mp4_p, d_npz, d_npz, preset_val, res_val, preview_crop
+            return v_p, d_mp4_p, d_npz, d_npz, preset_val, res_val, preview_crop, gr.update(value=stem), gr.update(value=stem)
             
         source_dropdown.change(
             fn=_on_hub_select,
             inputs=[source_dropdown],
-            outputs=[preview_video, preview_depth, depth_input, depth_state, crop_preset, crop_res, crop_preview_state],
+            outputs=[preview_video, preview_depth, depth_input, depth_state, crop_preset, crop_res, crop_preview_state, desat_clip_dropdown, iso_clip_dropdown],
         )
         
         def _toggle_preview(current_video, crop_preview, stem):
@@ -2258,21 +2487,37 @@ def create_stereofaster_ui():
             outputs=[step2_status],
         )
 
+        # Wire Title Depth Tools
+        desat_gen_btn.click(
+            fn=generate_title_desaturation_depth,
+            inputs=[desat_clip_dropdown],
+            outputs=[desat_status, preview_depth, depth_dropdown, depth_input],
+        )
+
+        iso_gen_btn.click(
+            fn=generate_3d_title_isolation_depth,
+            inputs=[iso_clip_dropdown, iso_color_target, iso_base_elev, iso_relief],
+            outputs=[iso_status, preview_depth, depth_dropdown, depth_input],
+        )
+
         # Refresh button
         def _refresh_hub():
+            sync_orphan_depth_mp4s()
             src = get_source_video_list()
             dep = get_depth_video_list()
             return (
                 gr.update(choices=[""] + src),
                 gr.update(choices=[""] + dep),
                 gr.update(choices=[""] + src),
-                gr.update(choices=[""] + src)
+                gr.update(choices=[""] + src),
+                gr.update(choices=[""] + src),
+                gr.update(choices=[""] + src),
             )
             
         refresh_btn.click(
             fn=_refresh_hub,
             inputs=[],
-            outputs=[source_dropdown, depth_dropdown, step1_dropdown, dc_step1_dropdown],
+            outputs=[source_dropdown, depth_dropdown, step1_dropdown, dc_step1_dropdown, desat_clip_dropdown, iso_clip_dropdown],
         )
         
         # Wire depth dropdown to update preview
