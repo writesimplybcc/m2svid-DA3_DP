@@ -557,7 +557,7 @@ def run_depth_on_source_videos(
 def run_m2svid_on_pairs(
     m2svid_config=None,
     m2svid_ckpt=None,
-    disparity_perc=0.05,
+    disparity_perc=20.0,
     convergence_point=0.5,
     closing_kernel=11,
     mask_antialias=False,
@@ -1702,13 +1702,16 @@ def step2_run_m2svid(
         reprojected_video = reprojected_dir / "input_reprojected.mp4"
         reprojected_mask = reprojected_dir / "input_reprojected_mask.mp4"
 
+        # Support both StereoCrafter scale (> 1.0, e.g. 20.0 -> 0.020) and legacy fraction (<= 1.0, e.g. 0.02)
+        eff_disp_perc = disparity_perc / 1000.0 if disparity_perc > 1.0 else disparity_perc
+
         # We call the existing warping logic with in-memory handoff
         warp_res = m2s_process_video_with_depth(
             video_path=str(video_path),
             depth_path=depth_npz_path,
             output_path_reprojected=str(reprojected_video),
             output_path_mask=str(reprojected_mask),
-            disparity_perc=disparity_perc,
+            disparity_perc=eff_disp_perc,
             batch_size=warping_batch_size,
             convergence_point=0.0, # MUST BE 0.0 TO PREVENT UNET GLITCHES!
             return_in_memory=True,
@@ -1926,7 +1929,7 @@ def step2_run_m2svid(
         # to completely eliminate the 21GB/42GB contiguous CPU RAM allocation crash!
         T_total = input_video.shape[1]
         orig_w = orig_shape[1]
-        shift = int(orig_w * disparity_perc * convergence_point)
+        shift = int(orig_w * eff_disp_perc * convergence_point)
         
         final_uint8_frames = []
         orig_left_uint8 = []
@@ -2309,7 +2312,13 @@ def create_stereofaster_ui():
                 gr.Markdown("#### Perform geometric warping and single-stepconditioned video generation.")
                 with gr.Row():
                     with gr.Column(scale=2):
-                        disparity_perc = gr.Slider(0.01, 0.2, value=0.05, step=0.005, label="Disparity Scale")
+                        disparity_perc = gr.Slider(
+                            5.0, 60.0,
+                            value=20.0,
+                            step=1.0,
+                            label="Disparity (StereoCrafter Scale)",
+                            info="Parallax depth shift matching StereoCrafter scale. Default: 20.0 = 2.0% of width (38.4px on 1080p). 15-25: natural, comfortable depth; 30+: deeper 3D."
+                        )
                         convergence_point = gr.Slider(0.0, 1.0, value=0.5, step=0.05, label="Convergence Point (Zero Parallax)", info="Default is 0.5. Higher values = looking through window effect. Lower values = 3D pop-outs.")
                         closing_kernel = gr.Slider(3, 21, value=11, step=2, label="Mask Closing Kernel")
                         mask_antialias = gr.Checkbox(label="Mask Antialias", value=False)

@@ -46,7 +46,8 @@ def process_video_with_depth(
     height = int(video_stream['height'])
 
     if disparity_perc is not None:
-        disparity_scale = int(width * disparity_perc)
+        eff_perc = disparity_perc / 1000.0 if disparity_perc > 1.0 else disparity_perc
+        disparity_scale = int(width * eff_perc)
 
     fps = get_video_fps(video_path, probe)
 

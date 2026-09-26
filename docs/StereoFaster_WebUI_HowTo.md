@@ -114,7 +114,7 @@ Synthesizes the right-eye view through geometric warping and 1-step video diffus
 | **Generation Chunk Size** | **`14`** *(Fastest & Recommended)* | `14` – `16` | Frames evaluated per inpainting pass. **Keep at `14` for maximum speed:** avoids $O(T^2)$ quadratic temporal attention compute and decodes VAE in 1 fast shot without triggering chunked OOM fallbacks. Max `18`–`20` for Native 1080p. |
 | **Parallel Chunk Batch Size** | **`2`** *(Non-Native only)* | `1` | **High-VRAM Saturation:** Batches multiple 14-frame chunks into a single GPU forward pass to utilize the RTX 5090's 32GB VRAM (~19–21 GB peak). **Available at non-native resolutions only** (`1024x576`, `768x432`, `1280x720`). Automatically clamped to `1` on Native 1080p to prevent OOM. |
 | **Warping Batch Size** | **`16`** *(up to `64`)* | `8` – `12` | Geometric reprojection frame batching. `16` maximizes GPU parallelism, finishing in ~1 second. |
-| **Disparity Scale** | `0.045` – `0.055` (Default `0.05`) | `0.045` – `0.055` | 3D depth separation. `0.05` is natural and comfortable; higher values increase pop-out. |
+| **Disparity (StereoCrafter Scale)** | **`20.0`** *(Range: `5.0` – `60.0`)* | `20.0` | StereoCrafter-calibrated 3D depth separation. `20.0` corresponds to 2.0% screen width (38.4px on 1080p) for comfortable, natural viewing. `15.0`–`25.0` gives natural depth; `30.0`+ produces deep dramatic 3D pop. Uses exponential Z-buffering occlusion weighting (`1.414 ** disp`) to cleanly overwrite background bleeding. (Backward-compatible with legacy decimal floats $\le 1.0$). |
 | **Convergence Point (Zero Parallax)** | `0.5` | `0.5` | Sets the screen-plane depth. Main subjects sit flush with the display; foreground pops out, background recedes. |
 | **Mask Closing Kernel** | `11` | `11` | Morphological dilation kernel for disocclusion cleanup. |
 | **Mask Antialias** | `False` | `False` | Prevents edge softening on disocclusion holes. |
@@ -202,7 +202,7 @@ Diffusion self-attention memory scales quadratically ($O(N^2)$) with spatial tok
   - **Profile C: Full Native 1080p Inpainting:**
     - **Processing Resolution:** **`Native`**, **Generation Chunk Size:** **`14` – `18`** (keep $\le 20$ to prevent VAE decode spikes), **Warping Batch:** **`16`**.
     - **Throughput:** **~4 fps** (~17 mins for 3-minute video; ~26 GB peak VRAM).
-  - **Disparity Scale:** `0.045` – `0.055` (default `0.05`).
+  - **Disparity (StereoCrafter Scale):** `15.0` – `25.0` (default `20.0`).
   - **Convergence Point:** `0.5` (zero parallax subject lock).
   - **Config:** Automatically loads `m2svid.yaml` (full temporal cross-attention).
 - **Environment & Drivers:**
@@ -236,9 +236,9 @@ Diffusion self-attention memory scales quadratically ($O(N^2)$) with spatial tok
 StereoFaster uses a **two-phase decoupled convergence architecture**:
 
 1. **Phase 1 — Inpainting Warping:**  
-   Warping executes strictly with `convergence = 0.0` (zero background shift). This ensures the left frame boundary remains sealed, preventing the SVD inpainting UNet from hallucinating jagged edge tears.
+   Warping executes strictly with `convergence = 0.0` (zero background shift). This ensures the left frame boundary remains sealed, preventing the SVD inpainting UNet from hallucinating jagged edge tears. Warping incorporates **StereoCrafter-style exponential Z-buffering** (`(1.414) ** rel_disp`), allowing foreground pixels to cleanly dominate background pixels without edge bleed.
 2. **Phase 2 — Post-Synthesis Convergence Shift:**  
-   The right-eye plate is shifted relative to the left-eye plate by `shift = int(width * disparity_perc * convergence_point)` at the compositing stage.
+   The right-eye plate is shifted relative to the left-eye plate by `shift = int(width * eff_disp_perc * convergence_point)` (where `eff_disp_perc = disparity / 1000.0` for StereoCrafter scale) at the compositing stage.
    - `Convergence = 0.5` (Default): The main character sits flush on the screen glass; foreground objects pop outward, backgrounds recede into the display.
    - `Convergence > 0.5`: The entire scene recedes into a deep theater window.
 

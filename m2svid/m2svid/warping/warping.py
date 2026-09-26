@@ -56,20 +56,22 @@ def scatter_image(
     valid_x1 = valid_x1[::-1]
     reproj_valid_x_coords_plus1 = reproj_valid_x_coords_plus1[::-1]
 
+  # Exponential Z-buffering occlusion weighting (matching StereoCrafter ForwardWarpStereo)
+  # High disparity = foreground -> exponentially higher weight to prevent edge ghosting/bleeding
+  rel_disp = np.clip(disparity_map - np.min(disparity_map), 0.0, 40.0)
+  z_weight = (1.414) ** rel_disp
+
+  w0 = (1.0 - weight_for_plus1[valid_y, valid_x]) * z_weight[valid_y, valid_x]
   reproj_img[valid_y, reproj_valid_x_coords] += (
-      input_frame[valid_y, valid_x]
-      * (1.0 - weight_for_plus1[valid_y, valid_x])[:, None]
+      input_frame[valid_y, valid_x] * w0[:, None]
   )
-  reproj_img_weight[valid_y, reproj_valid_x_coords] += (
-      1.0 - weight_for_plus1[valid_y, valid_x]
-  )[:, None]
+  reproj_img_weight[valid_y, reproj_valid_x_coords] += w0[:, None]
+
+  w1 = weight_for_plus1[valid_y1, valid_x1] * z_weight[valid_y1, valid_x1]
   reproj_img[valid_y1, reproj_valid_x_coords_plus1] += (
-      input_frame[valid_y1, valid_x1]
-      * weight_for_plus1[valid_y1, valid_x1][:, None]
+      input_frame[valid_y1, valid_x1] * w1[:, None]
   )
-  reproj_img_weight[valid_y1, reproj_valid_x_coords_plus1] += weight_for_plus1[
-      valid_y1, valid_x1
-  ][:, None]
+  reproj_img_weight[valid_y1, reproj_valid_x_coords_plus1] += w1[:, None]
 
   filled_pixel_mask[(reproj_img_weight != 0)[:, :, 0]] = 1
   reproj_img[reproj_img_weight != 0] /= reproj_img_weight[
@@ -83,16 +85,14 @@ def scatter_image(
 
     reprojected_depth[valid_y, reproj_valid_x_coords] += depth[
         valid_y, valid_x
-    ] * (1.0 - weight_for_plus1[valid_y, valid_x])
-    reprojected_depth_weight[valid_y, reproj_valid_x_coords] += (
-        1.0 - weight_for_plus1[valid_y, valid_x]
-    )
+    ] * w0
+    reprojected_depth_weight[valid_y, reproj_valid_x_coords] += w0
     reprojected_depth[valid_y1, reproj_valid_x_coords_plus1] += (
-        depth[valid_y1, valid_x1] * weight_for_plus1[valid_y1, valid_x1]
+        depth[valid_y1, valid_x1] * w1
     )
     reprojected_depth_weight[
         valid_y1, reproj_valid_x_coords_plus1
-    ] += weight_for_plus1[valid_y1, valid_x1]
+    ] += w1
 
     reprojected_depth[
         reprojected_depth_weight != 0
