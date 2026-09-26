@@ -17,20 +17,20 @@
 # Then run:
 #   pip install -r requirements.txt
 #
-# xformers is highly recommended by DA3 but can be skipped on some platforms.
-# This covers the modern 2-step DA3 + M2SVid pipeline + the Gradio WebUI.
+# This covers the modern 2-step VDA / DepthCrafter + M2SVid pipeline + the Gradio WebUI.
 
 # =============================================================================
 # Core Deep Learning
 # =============================================================================
 torch>=2.0.0
 torchvision>=0.15.0
-xformers>=0.0.22          # Strongly recommended for DA3 & M2SVid speed/quality
+xformers>=0.0.22          # Strongly recommended for M2SVid speed/quality
 
 # =============================================================================
-# DA3 (Depth Anything 3) Core Dependencies
+# Video Depth Anything (VDA) & DepthCrafter Core Dependencies
 # =============================================================================
 addict
+easydict
 huggingface_hub
 safetensors
 omegaconf
@@ -44,8 +44,8 @@ pytorch-lightning
 # =============================================================================
 # M2SVid / Hi3D-Official (SGM) Dependencies
 # These are the minimal packages pulled in by the parts of M2SVid we use
-# (warping, prepare_da3_depth, inpaint_and_refine, model loading)
-git+https://github.com/apple/ml-depth-pro.git
+# (warping, prepare_vda_depth, inpaint_and_refine, model loading)
+# =============================================================================
 ffmpeg-python
 imageio
 kornia                      # Required by sgm (from Hi3D-Official third_party)
@@ -84,7 +84,6 @@ nvitop                      # Interactive real-time GPU/VRAM/CUDA monitoring
 # =============================================================================
 # Optional but recommended for full functionality
 # =============================================================================
-# For DA3 streaming / long video support
 # faiss-cpu                 # or faiss-gpu if you have it
 # numba
 # pandas
@@ -99,8 +98,5 @@ nvitop                      # Interactive real-time GPU/VRAM/CUDA monitoring
 #     --index-url https://download.pytorch.org/whl/cu121
 # RUN pip install -r requirements.txt
 #
-# Then install DA3 in editable mode inside the container:
-#   cd Depth-Anything-3 && pip install -e ".[app]"
-#
-# And make sure third-party paths are in PYTHONPATH for M2SVid:
-#   PYTHONPATH=".:Depth-Anything-3/src:m2svid/third_party/Hi3D-Official:..."
+# And make sure third-party paths are in PYTHONPATH:
+#   PYTHONPATH=".:m2svid/third_party/Video-Depth-Anything:m2svid/third_party/Hi3D-Official:..."

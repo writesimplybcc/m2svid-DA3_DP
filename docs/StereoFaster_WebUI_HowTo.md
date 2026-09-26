@@ -11,9 +11,9 @@
 2. [Quickstart & Launching](#quickstart--launching)
 3. [The 4-Tab WebUI Interface](#the-4-tab-webui-interface)
    - [Tab 1: 📁 File & Preview Hub](#tab-1--file--preview-hub-input-center)
-   - [Tab 2: 🚀 Step 1 — DepthCrafter Estimation (Temporal 3D Depth)](#tab-2--step-1--depthcrafter-estimation-temporal-3d-depth)
-   - [Tab 3: 🎬 Step 2 — M2SVid Stereography (Inpainting & Synthesis)](#tab-3--step-2--m2svid-stereography-inpainting--synthesis)
-   - [Tab 4: 🛠️ Tab 3 — Other Depth Models (DA3 & Apple DepthPro)](#tab-4-️-tab-3--other-depth-models-da3--apple-depthpro)
+   - [Tab 2: ⚡ Step 1 — Video Depth Anything (VDA)](#tab-2--step-1--video-depth-anything-vda)
+   - [Tab 3: ⏳ Step 1 (Alt) — DepthCrafter Estimation](#tab-3--step-1-alt--depthcrafter-estimation)
+   - [Tab 4: 🎬 Step 2 — M2SVid Stereography](#tab-4--step-2--m2svid-stereography)
 4. [The Fine-Detail Preservation Law: Hair, Faces & Thin Edges](#the-fine-detail-preservation-law-hair-faces--thin-edges)
 5. [GPU Optimization & 1:1 Native Resolution Settings Matrix](#gpu-optimization--11-native-resolution-settings-matrix)
    - [RTX 3060 (12 GB)](#1-rtx-3060-12-gb-local-workhorse)
@@ -74,17 +74,39 @@ docker run -d --gpus all \
 
 ## The 4-Tab WebUI Interface
 
-### Tab 1: 📁 File & Preview Hub (Input Center)
+### Tab 1: 📁 File & Preview Hub (Input Center & Title Depth Tools)
 
 - **Select Prefix for Match & Preview (Master Dropdown):**
   - **CRITICAL:** What is selected here dictates which video is loaded into system memory for **Step 2**.
   - Selecting a clip loads it into the **Source Video Preview** player and links its corresponding depth map in `depthmaps_videos/`.
 - **Upload Source Video:** Drag and drop `.mp4`, `.mov`, `.mkv` files directly into `source_videos/`.
 - **Auto-Crop Aspect Ratio:** Detects and removes black pillarboxes and letterboxes.
+- **Title Depth Tools (Solid Background Void):** Instant AI-free depth map generation for flat titles and 3D sculpted/claymation text on solid backgrounds.
 
 ---
 
-### Tab 2: 🚀 Step 1 — DepthCrafter Estimation (Temporal 3D Depth)
+### Tab 2: ⚡ Step 1 — Video Depth Anything (VDA)
+
+Video Depth Anything produces temporally smooth, high-fidelity relative depth maps at blazingly fast inference speeds (70–80+ FPS on RTX 5090).
+
+| Parameter | Recommended Setting | Options / Range | Purpose |
+|---|---|---|---|
+| **VDA Model / Encoder** | **`Video-Depth-Anything-Large (vitl)`** | `vitl` (381.8M), `vitb` (113.1M) | Large offers peak edge sharpness and detail; Base runs ~2× faster with minimal quality difference. |
+| **Inference Mode** | **`Sliding Window`** | `Sliding Window`, `Streaming` | Sliding window runs 32-frame overlapping chunks with scale/shift alignment. Streaming uses recurrent KV cache for low-memory continuous streaming. |
+| **Model Input Size** | **`518`** | 256–1024 (multiples of 14) | Resolution fed into the ViT backbone. 518 is the optimal default; 392 saves VRAM on low-memory cards. |
+| **Max Resolution (Longest Edge)** | **`1280`** | 384–1920 | Scales video before processing if needed; depth is resized to match original video dimensions. |
+| **Target FPS** | **`-1` (Native FPS)** | -1.0 to 60.0 | Subsample video FPS if desired; `-1` preserves full native frame rate. |
+| **Max Frames Limit** | **`-1` (Full Video)** | -1 to 3000 | Limit total frames for rapid testing; `-1` processes entire video. |
+| **Global Disparity Normalization** | **`True`** | Checkbox | Computes global minimum and maximum across the entire video. Prevents depth pulsing or breathing across frames. |
+| **FP32 Precision** | **`False` (FP16)** | Checkbox | Uncheck for faster FP16 inference; enable if seeing precision gradient banding. |
+
+- **Outputs:**
+  - `depthmaps_videos/<stem>_VDAL_depth.npz` (or `_VDAB_depth.npz`): Compressed array containing normalized relative disparity ($1.0 = \text{near}, 0.0 = \text{far}$).
+  - `depthmaps_videos/<stem>_VDAL_depth.mp4`: Grayscale preview video.
+
+---
+
+### Tab 3: ⏳ Step 1 (Alt) — DepthCrafter Estimation (Diffusion-Based Depth)
 
 Estimates continuous, flicker-free video depth using the DepthCrafter video diffusion model.
 
@@ -104,7 +126,7 @@ Estimates continuous, flicker-free video depth using the DepthCrafter video diff
 
 ---
 
-### Tab 3: 🎬 Step 2 — M2SVid Stereography (Inpainting & Synthesis)
+### Tab 4: 🎬 Step 2 — M2SVid Stereography (Inpainting & Synthesis)
 
 Synthesizes the right-eye view through geometric warping and 1-step video diffusion inpainting.
 
@@ -118,13 +140,6 @@ Synthesizes the right-eye view through geometric warping and 1-step video diffus
 | **Convergence Point (Zero Parallax)** | `0.5` | `0.5` | Sets the screen-plane depth. Main subjects sit flush with the display; foreground pops out, background recedes. |
 | **Mask Closing Kernel** | `11` | `11` | Morphological dilation kernel for disocclusion cleanup. |
 | **Mask Antialias** | `False` | `False` | Prevents edge softening on disocclusion holes. |
-
----
-
-### Tab 4: 🛠️ Tab 3 — Other Depth Models (DA3 & Apple DepthPro)
-
-- **Apple DepthPro:** Zero-shot metric depth with specialized multi-scale patch transformers. If you have scenes with extreme flyaway hair or foliage where temporal consistency is secondary, DepthPro generates sharp edge boundaries.
-- **DA3NESTED-GIANT-LARGE-1.1:** Combines relative geometric understanding with metric scale cues.
 
 ---
 

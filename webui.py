@@ -1,19 +1,19 @@
 """
 StereoFaster WebUI - Gradio Interface
-Modern 2-step DA3 + M2SVid pipeline for monocular-to-stereo video conversion.
+Modern 2-step Video Depth Anything (VDA) / DepthCrafter + M2SVid pipeline for monocular-to-stereo video conversion.
 
 Based on the conceptual structure of the StereoCrafter combined webui,
-but simplified to exactly two primary heavy processes as designed for StereoFaster:
+optimized for StereoFaster:
 
-1. DA3 Depth Estimation (monocular / optionally metric or streaming)
+1. Video Depth Anything (VDA Base & Large) / DepthCrafter Estimation
 2. M2SVid stage (lightweight geometric warping + single 1-step conditioned SVD)
 
 Launch:
-    PYTHONPATH="Depth-Anything-3/src:.:${PYTHONPATH}" python webui.py --server-port 7878
+    python webui.py --server-port 7878
 
 Requirements:
-- DA3 installed or src in path
-- M2SVid dependencies + third_party/Hi3D-Official etc. in path (as for normal inference)
+- Video Depth Anything in third_party
+- M2SVid dependencies + third_party in path
 - M2SVid weights in ckpts/
 """
 
@@ -71,7 +71,7 @@ PROJECT_ROOT = Path(__file__).parent.resolve()
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "m2svid"))          # for m2svid.m2svid.*
 sys.path.insert(0, str(PROJECT_ROOT / "m2svid" / "m2svid"))  # extra safety
-sys.path.insert(0, str(PROJECT_ROOT / "Depth-Anything-3" / "src"))
+sys.path.insert(0, str(PROJECT_ROOT / "m2svid" / "third_party" / "Video-Depth-Anything"))
 sys.path.insert(0, str(PROJECT_ROOT / "m2svid" / "third_party" / "Hi3D-Official"))
 sys.path.insert(0, str(PROJECT_ROOT / "m2svid" / "third_party" / "pytorch-msssim"))
 
@@ -225,7 +225,7 @@ def batch_auto_crop_all(force_crop_enabled=False, manual_preset="16:9 (None)", p
     vids = [p for p in SOURCE_DIR.iterdir() if p.is_file() and p.suffix.lower() in ('.mp4', '.mov', '.avi', '.mkv')]
     vids = [v for v in vids if not v.stem.endswith("_cropped")]
     if not vids:
-        return gr.update(), gr.update(), gr.update()
+        return gr.update(), gr.update(), gr.update(), gr.update()
         
     for i, vp in enumerate(vids):
         progress(float(i)/len(vids), desc=f"Auto-Cropping {vp.name}")
@@ -240,7 +240,7 @@ def batch_auto_crop_all(force_crop_enabled=False, manual_preset="16:9 (None)", p
             
     progress(1.0, desc="Batch Crop Complete!")
     src = get_source_video_list()
-    return gr.update(), gr.update(choices=[""] + src), gr.update(choices=[""] + src)
+    return gr.update(), gr.update(choices=[""] + src), gr.update(choices=[""] + src), gr.update(choices=[""] + src)
 
 
 
@@ -268,51 +268,41 @@ def convert_depth_video_to_npz(video_path: str, out_npz_path: str):
     save_m2svid_compatible_npz(depth, out_npz_path)
 
 
-def run_depth_pro_depth(
-    frames: list[np.ndarray],
-    device: str = "cuda",
-    progress=None,
-) -> np.ndarray:
-    """Run Depth Pro inference on a list of RGB frames."""
-    import depth_pro
-    from PIL import Image
-    
-    total_frames = len(frames)
-    SF_LOG.info(f"Loading Apple Depth Pro model... processing {total_frames} frames")
-    device_obj = torch.device(device)
-    precision = torch.half if device == "cuda" else torch.float32
-    model, transform = depth_pro.create_model_and_transforms(
-        device=device_obj,
-        precision=precision,
-    )
-    model.eval()
-    
-    depths = []
-    for i in range(total_frames):
-        frame = frames[i]
-        pil_img = Image.fromarray(frame)
-        x = transform(pil_img)
-        with torch.inference_mode():
-            pred = model.infer(x, f_px=None)
-        depth_val = pred["depth"].detach().cpu().numpy().squeeze()
-        depths.append(depth_val)
-        
-        if progress is not None:
-            try:
-                progress((i + 1) / total_frames, desc=f"DepthPro processing frame {i+1}/{total_frames}")
-            except Exception:
-                pass
-                
-        # Console logging every 10 frames or the last frame
-        if (i + 1) % 10 == 0 or i == total_frames - 1:
-            SF_LOG.info(f"DepthPro processing frame {i+1}/{total_frames}...")
-        
-    depth = np.stack(depths, axis=0)
-    return depth
+def save_m2svid_compatible_npz(depth: np.ndarray, out_path: str):
+    """Save depth array with the single key 'depth' that m2svid/warping.py expects."""
+    p = Path(out_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(str(p), depth=depth.astype(np.float32))
+
+
+def load_video_frames(video_path: str, target_fps: float = 0.0) -> tuple[list[np.ndarray], float, tuple[int, int]]:
+    """Extract frames from video. target_fps=0 means every frame."""
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open video: {video_path}")
+    video_fps = cap.get(cv2.CAP_PROP_FPS) or 24.0
+    frame_interval = 1
+    if target_fps > 0:
+        frame_interval = max(1, int(round(video_fps / target_fps)))
+    frames = []
+    frame_idx = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        if frame_idx % frame_interval == 0:
+            frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        frame_idx += 1
+    cap.release()
+    if not frames:
+        raise RuntimeError("No frames extracted")
+    h, w = frames[0].shape[:2]
+    actual_fps = video_fps / frame_interval if frame_interval > 0 else video_fps
+    return frames, actual_fps, (h, w)
+
 
 def run_depth_on_source_videos(
-    progress=gr.Progress(track_tqdm=True),
-    model_name=None,
+    model_name="tencent/DepthCrafter",
     process_res=720,
     batch_size=4,
     guidance_scale=1.0,
@@ -320,14 +310,15 @@ def run_depth_on_source_videos(
     window_size=30,
     overlap=10,
     attn_slicing="Auto (Adapts to GPU VRAM)",
-    cpu_offload="Auto (Adapts to GPU VRAM)"
+    cpu_offload="Auto (Adapts to GPU VRAM)",
+    progress=gr.Progress(track_tqdm=True)
 ):
     """Process all videos in SOURCE_DIR and save depth .npz and depth_depth.mp4 in DEPTH_DIR if missing."""
-    SF_LOG.info(f"Starting batch depth processing with model {model_name} on source_videos directory")
-    unload_m2svid_model()
-    global DEFAULT_DA3_MODEL
-    model_name = model_name or DEFAULT_DA3_MODEL
+    model_name = model_name or "tencent/DepthCrafter"
+    is_depthcrafter = True
     suffix = get_model_suffix(model_name)
+    SF_LOG.info(f"Starting batch DepthCrafter processing on source_videos directory")
+    unload_m2svid_model()
     
     vids = sorted([p for p in SOURCE_DIR.iterdir() if p.is_file() and p.suffix.lower() in ('.mp4', '.mov', '.avi', '.mkv')], key=lambda p: p.name)
     
@@ -413,45 +404,26 @@ def run_depth_on_source_videos(
             except Exception: pass
             
         try:
-            is_depth_pro = "DepthPro" in model_name or "depth-pro" in model_name
-            is_depthcrafter = "DepthCrafter" in model_name
             device = "cuda" if torch.cuda.is_available() else "cpu"
+            cap = cv2.VideoCapture(str(vp))
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            if fps <= 0: fps = 30.0
+            cap.release()
             
-            if is_depthcrafter:
-                cap = cv2.VideoCapture(str(vp))
-                fps = cap.get(cv2.CAP_PROP_FPS)
-                w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                if fps <= 0: fps = 30.0
-                cap.release()
-                
-                from m2svid.prepare_depthcrafter import run_depthcrafter_depth
-                depth = run_depthcrafter_depth(
-                    str(vp),
-                    process_res=process_res,
-                    guidance_scale=guidance_scale,
-                    num_inference_steps=inference_steps,
-                    window_size=window_size,
-                    overlap=overlap,
-                    attn_slicing=attn_slicing,
-                    cpu_offload=cpu_offload,
-                    progress=progress
-                )
-            else:
-                frames, fps, (h, w) = load_video_frames(str(vp), target_fps=0.0)
-                SF_LOG.debug(f"Loaded {len(frames)} frames @ {fps}fps, size {w}x{h}")
-                if is_depth_pro:
-                    depth = run_depth_pro_depth(frames, device=device, progress=progress)
-                    inv_depth = 1.0 / np.clip(depth, 1e-4, 1e5)
-                    inv_min, inv_max = inv_depth.min(), inv_depth.max()
-                    if inv_max - inv_min > 1e-6:
-                        depth = (inv_depth - inv_min) / (inv_max - inv_min)
-                    else:
-                        depth = np.zeros_like(inv_depth)
-                else:
-                    depth = run_da3_depth(frames, model_name=model_name, process_res=process_res, device=device, batch_size=batch_size, progress=progress)
-                    depth = -depth
-                del frames
+            from m2svid.prepare_depthcrafter import run_depthcrafter_depth
+            depth = run_depthcrafter_depth(
+                str(vp),
+                process_res=process_res,
+                guidance_scale=guidance_scale,
+                num_inference_steps=inference_steps,
+                window_size=window_size,
+                overlap=overlap,
+                attn_slicing=attn_slicing,
+                cpu_offload=cpu_offload,
+                progress=progress
+            )
                 
             if depth.shape[1:] != (h, w):
                 depth = np.stack([cv2.resize(d, (w, h), cv2.INTER_CUBIC) for d in depth])
@@ -531,11 +503,6 @@ def run_depth_on_source_videos(
         SF_LOG.info(line)
 
     try:
-        from m2svid.prepare_da3_depth import unload_da3_model
-        unload_da3_model()
-    except Exception:
-        pass
-    try:
         from m2svid.prepare_depthcrafter import unload_depthcrafter_model
         unload_depthcrafter_model()
     except Exception:
@@ -552,6 +519,106 @@ def run_depth_on_source_videos(
         gr.update(choices=[""] + src),
         summary_msg
     )
+
+
+def run_vda_on_source_videos(
+    encoder="Video-Depth-Anything-Large (vitl - 381.8M, Highest Quality)",
+    mode="Sliding Window (Optimal Quality & Alignment)",
+    input_size=518,
+    max_res="1280 (Recommended)",
+    target_fps="-1 (Native Source FPS)",
+    max_len=-1,
+    fp32=False,
+    global_norm=True,
+    progress=gr.Progress(track_tqdm=True)
+):
+    """Process all videos in SOURCE_DIR with Video Depth Anything and save into DEPTH_DIR."""
+    SF_LOG.info("Starting batch VDA depth processing on source_videos")
+    unload_m2svid_model()
+    enc_code = "vitl" if "large" in str(encoder).lower() or "vitl" in str(encoder).lower() else "vitb"
+    suffix = "_VDAL" if enc_code == "vitl" else "_VDAB"
+    
+    clean_res = 1280
+    if isinstance(max_res, str):
+        for part in max_res.split():
+            if part.isdigit():
+                clean_res = int(part)
+                break
+    elif isinstance(max_res, (int, float)):
+        clean_res = int(max_res)
+        
+    clean_fps = -1.0
+    if isinstance(target_fps, str):
+        for part in target_fps.split():
+            try:
+                clean_fps = float(part)
+                break
+            except ValueError:
+                pass
+    elif isinstance(target_fps, (int, float)):
+        clean_fps = float(target_fps)
+        
+    clean_mode = "streaming" if "stream" in str(mode).lower() else "sliding_window"
+
+    vids = sorted([p for p in SOURCE_DIR.iterdir() if p.is_file() and p.suffix.lower() in ('.mp4', '.mov', '.avi', '.mkv')], key=lambda p: p.name)
+    vids = [vp for vp in vids if not (not vp.stem.endswith("_cropped") and f"{vp.stem}_cropped" in {p.stem for p in vids})]
+    total = len(vids)
+    SF_LOG.info(f"Found {total} video(s) to process in batch VDA")
+
+    successful_files = []
+    error_files = []
+    for i, vp in enumerate(vids):
+        global GLOBAL_CANCEL
+        if GLOBAL_CANCEL:
+            GLOBAL_CANCEL = False
+            SF_LOG.info("Batch VDA processing cancelled by user.")
+            break
+            
+        stem = vp.stem
+        out_npz = DEPTH_DIR / f"{stem}{suffix}_depth.npz"
+        out_mp4 = DEPTH_DIR / f"{stem}{suffix}_depth.mp4"
+        if out_npz.exists() and out_mp4.exists():
+            SF_LOG.info(f"Skipping {stem}: already has VDA depth at {out_npz.name}")
+            continue
+
+        if progress:
+            try: progress(float(i) / max(1, total), desc=f"VDA [{i+1}/{total}]: {stem}")
+            except Exception: pass
+
+        try:
+            depth, fps = run_vda_depth(
+                video_path=str(vp),
+                encoder=enc_code,
+                input_size=int(input_size),
+                max_res=clean_res,
+                mode=clean_mode,
+                target_fps=clean_fps,
+                max_len=int(max_len),
+                fp32=fp32,
+                global_norm=global_norm,
+                progress=progress
+            )
+            save_m2svid_compatible_npz(depth, str(out_npz))
+            _create_depth_preview_video(depth, str(out_mp4), fps)
+            successful_files.append(vp.name)
+            del depth
+            clear_cuda()
+        except Exception as e:
+            clear_cuda()
+            SF_LOG.error(f"Error processing {stem} with VDA: {e}")
+            error_files.append((vp.name, str(e)))
+            if "stopped by user" in str(e).lower():
+                break
+
+    unload_vda_model()
+    clear_cuda()
+    src = get_source_video_list()
+    dep = get_depth_video_list()
+    msg = f"✅ Batch VDA Complete! Successfully processed {len(successful_files)} video(s)."
+    if error_files:
+        msg += f" (⚠️ {len(error_files)} errors)"
+    return gr.update(), gr.update(choices=[""] + src), gr.update(choices=[""] + dep), gr.update(choices=[""] + src), msg
+
 
 
 def run_m2svid_on_pairs(
@@ -590,9 +657,18 @@ def run_m2svid_on_pairs(
             SF_LOG.info("Batch M2SVid processing cancelled by user.")
             break
         stem = vp.stem
+        vdal_npz = DEPTH_DIR / f"{stem}_VDAL_depth.npz"
+        vda_npz = DEPTH_DIR / f"{stem}_VDA_depth.npz"
+        vdab_npz = DEPTH_DIR / f"{stem}_VDAB_depth.npz"
         dc_npz = DEPTH_DIR / f"{stem}_DC_depth.npz"
         legacy_npz = DEPTH_DIR / f"{stem}_depth.npz"
-        if dc_npz.exists():
+        if vdal_npz.exists():
+            depth_npz = vdal_npz
+        elif vda_npz.exists():
+            depth_npz = vda_npz
+        elif vdab_npz.exists():
+            depth_npz = vdab_npz
+        elif dc_npz.exists():
             depth_npz = dc_npz
         elif legacy_npz.exists():
             depth_npz = legacy_npz
@@ -606,6 +682,9 @@ def run_m2svid_on_pairs(
         if depth_npz is None:
             # Check if an orphan depth MP4 exists (e.g. uploaded via FileBrowser or kept for space saving)
             mp4_candidates = [
+                DEPTH_DIR / f"{stem}_VDAL_depth.mp4",
+                DEPTH_DIR / f"{stem}_VDA_depth.mp4",
+                DEPTH_DIR / f"{stem}_VDAB_depth.mp4",
                 DEPTH_DIR / f"{stem}_DC_depth.mp4",
                 DEPTH_DIR / f"{stem}_depth.mp4",
             ]
@@ -730,33 +809,28 @@ from omegaconf import OmegaConf
 from pytorch_lightning import seed_everything
 import random
 
-# Note: We deliberately avoid importing from depth_anything_3.api at module level
-# to prevent pulling in 3DGS / gsplat code paths (which are not used in this StereoFaster webui).
-
-# M2SVid internals (reuse existing logic)
-# Robust import: try normal package import first, then direct file load as fallback
-def _load_prepare_da3_module():
+# Video Depth Anything (VDA) module loader
+def _load_prepare_vda_module():
     try:
-        import m2svid.m2svid.prepare_da3_depth as mod
+        import m2svid.m2svid.prepare_vda_depth as mod
         return mod
     except ImportError:
         import importlib.util
         spec = importlib.util.spec_from_file_location(
-            "prepare_da3_depth",
-            PROJECT_ROOT / "m2svid" / "m2svid" / "prepare_da3_depth.py"
+            "prepare_vda_depth",
+            PROJECT_ROOT / "m2svid" / "m2svid" / "prepare_vda_depth.py"
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return mod
 
-_prepare_mod = _load_prepare_da3_module()
-load_video_frames = _prepare_mod.load_video_frames
-run_da3_depth = _prepare_mod.run_da3_depth
-save_m2svid_compatible_npz = _prepare_mod.save_m2svid_compatible_npz
+_vda_mod = _load_prepare_vda_module()
+run_vda_depth = _vda_mod.run_vda_depth
+unload_vda_model = _vda_mod.unload_vda_model
 
 # Note: M2SVid / sgm heavy imports are intentionally lazy-loaded inside step2_run_m2svid
 # to avoid pulling in kornia, sgm, and related code until the user actually runs Step 2.
-# This saves startup time and VRAM (consistent with the DA3 lazy loading).
+# This saves startup time and VRAM.
 
 def _load_warping_module():
     """Robustly load the standalone m2svid/warping.py (not the nested package version)."""
@@ -770,10 +844,9 @@ def _load_warping_module():
     return mod
 
 # --- Configuration ---
-# Recommended defaults for StereoFaster (DA3 + M2SVid) use case:
-# - DA3NESTED-GIANT-LARGE-1.1 : Best overall quality (official preferred -1.1 retrained version)
-# - DA3MONO-LARGE             : Excellent pure relative monocular depth (often best for warping accuracy)
-# Default model is now defined below models list
+# Recommended defaults for StereoFaster (VDA / DepthCrafter + M2SVid) use case:
+# - Video-Depth-Anything-Large (vitl - 381.8M) : Highest detail & accuracy
+# - Video-Depth-Anything-Base (vitb - 113.1M)  : ~2x faster, lightweight
 def _is_fast_gpu(gpu_name: str) -> bool:
     n = gpu_name.lower()
     markers = (
@@ -787,22 +860,22 @@ def _is_fast_gpu(gpu_name: str) -> bool:
 def get_vram_defaults():
     """Returns dynamic batch sizes based on VRAM capacity (targeting 12GB, 24GB, 32GB, 48GB, 96GB)."""
     if not torch.cuda.is_available():
-        return {"da3": 2, "warp": 1, "vae": 2, "gen_chunk": 2}
+        return {"vda": 2, "warp": 1, "vae": 2, "gen_chunk": 2}
     vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
     
     if vram_gb >= 90: # 96GB class (e.g., A100 96GB/Mac 128GB)
-        return {"da3": 32, "warp": 32, "vae": 14, "gen_chunk": 14, "gen_batch": 4}
+        return {"vda": 32, "warp": 32, "vae": 14, "gen_chunk": 14, "gen_batch": 4}
     if vram_gb >= 45: # 48GB class (e.g., RTX 6000 Ada / A6000)
-        return {"da3": 16, "warp": 32, "vae": 14, "gen_chunk": 14, "gen_batch": 3}
+        return {"vda": 16, "warp": 32, "vae": 14, "gen_chunk": 14, "gen_batch": 3}
     if vram_gb >= 30: # 32GB class (e.g., RTX 5090 / V100 32GB)
-        return {"da3": 12, "warp": 32, "vae": 14, "gen_chunk": 14, "gen_batch": 3}
+        return {"vda": 12, "warp": 32, "vae": 14, "gen_chunk": 14, "gen_batch": 3}
     if vram_gb >= 22: # 24GB class (e.g., RTX 3090 / 4090)
-        return {"da3": 8, "warp": 32, "vae": 14, "gen_chunk": 14, "gen_batch": 2}
+        return {"vda": 8, "warp": 32, "vae": 14, "gen_chunk": 14, "gen_batch": 2}
     if vram_gb >= 11: # 12GB class (e.g., RTX 3060 / 4070)
-        return {"da3": 4, "warp": 8, "vae": 4, "gen_chunk": 5, "gen_batch": 1}
+        return {"vda": 4, "warp": 8, "vae": 4, "gen_chunk": 5, "gen_batch": 1}
         
     # Fallback for <12GB (e.g., 8GB cards)
-    return {"da3": 2, "warp": 2, "vae": 2, "gen_chunk": 3, "gen_batch": 1}
+    return {"vda": 2, "warp": 2, "vae": 2, "gen_chunk": 3, "gen_batch": 1}
 
 _VRAM_DEFAULTS = get_vram_defaults()
 _FAST_GPU = False
@@ -814,7 +887,7 @@ if torch.cuda.is_available():
     SF_LOG.info(
         f"GPU detected: {_gpu_name} ({_vram_gb:.1f} GB) -> "
         f"{'high-quality m2svid.yaml' if _FAST_GPU else 'fast m2svid_no_fullatten.yaml'} "
-        f"| VRAM Profile: DA3={_VRAM_DEFAULTS['da3']}, Warp={_VRAM_DEFAULTS['warp']}, VAE={_VRAM_DEFAULTS['vae']}"
+        f"| VRAM Profile: VDA={_VRAM_DEFAULTS['vda']}, Warp={_VRAM_DEFAULTS['warp']}, VAE={_VRAM_DEFAULTS['vae']}"
     )
 
 DEFAULT_M2SVID_CONFIG = str(
@@ -826,7 +899,7 @@ DEFAULT_M2SVID_CKPT = str(PROJECT_ROOT / "m2svid" / "ckpts" / "m2svid_weights.pt
 STATE = {
     "input_video": None,
     "depth_npz": None,
-    "da3_depth": None,          # numpy array (T,H,W)
+    "vda_depth": None,          # numpy array (T,H,W)
     "original_fps": 24.0,
     "original_hw": (720, 1280),
 }
@@ -855,16 +928,15 @@ def get_source_video_list():
     return vids
 
 
-DEFAULT_DA3_MODEL = "tencent/DepthCrafter"
+DEFAULT_DEPTH_MODEL = "depth-anything/Video-Depth-Anything-Large"
 
 MODEL_SUFFIX_MAP = {
+    "depth-anything/Video-Depth-Anything-Large": "_VDAL",
+    "depth-anything/Video-Depth-Anything-Base": "_VDAB",
+    "Video-Depth-Anything-Large": "_VDAL",
+    "Video-Depth-Anything-Base": "_VDAB",
+    "Video-Depth-Anything": "_VDA",
     "tencent/DepthCrafter": "_DC",
-    "depth-anything/DA3NESTED-GIANT-LARGE-1.1": "_NGL",
-    "depth-anything/DA3MONO-LARGE": "_ML",
-    "depth-anything/DA3-GIANT-1.1": "_G",
-    "depth-anything/DA3-LARGE-1.1": "_L",
-    "depth-anything/DA3METRIC-LARGE": "_ML",
-    "apple/DepthPro": "_DP",
 }
 
 
@@ -919,8 +991,11 @@ def select_source_video(stem):
     depth_npz = None
     depth_mp4 = None
     
-    # Priority order: DepthCrafter -> Legacy/standard -> other model-tagged depths
+    # Priority order: VDA Large -> VDA -> VDA Base -> DepthCrafter -> Legacy/standard
     base_stems = [
+        f"{stem}_VDAL_depth",
+        f"{stem}_VDA_depth",
+        f"{stem}_VDAB_depth",
         f"{stem}_DC_depth",
         f"{stem}_depth",
     ]
@@ -967,7 +1042,7 @@ def clear_cuda():
 
 
 # =============================================================================
-# STEP 1: DA3 Depth Estimation
+# STEP 1: Depth Estimation (DepthCrafter & Video Depth Anything)
 # =============================================================================
 
 def step1_run_depthcrafter(video_path: str, process_res: int, guidance_scale: float, inference_steps: int, window_size: int, overlap: int, attn_slicing: str = "Auto (Adapts to GPU VRAM)", cpu_offload: str = "Auto (Adapts to GPU VRAM)", progress=gr.Progress(track_tqdm=True)) -> Tuple[str, Optional[str], Optional[str], Optional[str]]:
@@ -1043,15 +1118,20 @@ def step1_run_depthcrafter(video_path: str, process_res: int, guidance_scale: fl
             pass
         clear_cuda()
 
-def step1_run_da3_depth(
+def step1_run_vda_depth(
     input_video: str,
-    model_name: str,
-    process_res: int,
-    batch_size: int,
+    encoder: str = "Video-Depth-Anything-Large (vitl - 381.8M, Highest Quality)",
+    mode: str = "Sliding Window (Optimal Quality & Alignment)",
+    input_size: int = 518,
+    max_res: str = "1280 (Recommended)",
+    target_fps: str = "-1 (Native Source FPS)",
+    max_len: int = -1,
+    fp32: bool = False,
+    global_norm: bool = True,
     progress=gr.Progress(track_tqdm=True)
 ) -> Tuple[str, str, str, Optional[str]]:
     """
-    Run depth estimation (DA3 or Depth Pro) on the uploaded video.
+    Run Video Depth Anything (VDA Base or Large) on the uploaded/selected video.
     Produces both a depth.npz (for M2SVid warping) and a visual depth.mp4 video.
     Returns: (status, depth_preview_video, depth_npz_path, depth_state_for_step2)
     """
@@ -1065,10 +1145,32 @@ def step1_run_da3_depth(
             input_video = str(possible[0])
         else:
             return f"Video {input_video} not found in source_videos.", None, None, None
-    
-    is_depth_pro = "DepthPro" in model_name or "depth-pro" in model_name
-    model_type_str = "Depth Pro" if is_depth_pro else "DA3"
-    model_suffix = get_model_suffix(model_name)
+
+    enc_code = "vitl" if "large" in str(encoder).lower() or "vitl" in str(encoder).lower() else "vitb"
+    model_suffix = "_VDAL" if enc_code == "vitl" else "_VDAB"
+    model_type_str = f"Video Depth Anything ({'Large' if enc_code == 'vitl' else 'Base'})"
+
+    clean_res = 1280
+    if isinstance(max_res, str):
+        for part in max_res.split():
+            if part.isdigit():
+                clean_res = int(part)
+                break
+    elif isinstance(max_res, (int, float)):
+        clean_res = int(max_res)
+        
+    clean_fps = -1.0
+    if isinstance(target_fps, str):
+        for part in target_fps.split():
+            try:
+                clean_fps = float(part)
+                break
+            except ValueError:
+                pass
+    elif isinstance(target_fps, (int, float)):
+        clean_fps = float(target_fps)
+        
+    clean_mode = "streaming" if "stream" in str(mode).lower() else "sliding_window"
 
     SF_LOG.info(f"Starting {model_type_str} depth estimation")
     progress(0, desc=f"Preparing {model_type_str} depth estimation...")
@@ -1082,69 +1184,33 @@ def step1_run_da3_depth(
         SF_LOG.info(f"Uploaded video copied to {dst_path}")
 
     STATE["input_video"] = video_path
-    SF_LOG.debug(f"Video path set to: {video_path}")
+    stem = Path(video_path).stem
 
     try:
-        frames, fps, (h, w) = load_video_frames(video_path, target_fps=0.0)
+        unload_m2svid_model()
+        depth, fps = run_vda_depth(
+            video_path=video_path,
+            encoder=enc_code,
+            input_size=int(input_size),
+            max_res=clean_res,
+            mode=clean_mode,
+            target_fps=clean_fps,
+            max_len=int(max_len),
+            fp32=fp32,
+            global_norm=global_norm,
+            progress=progress
+        )
+
+        STATE["vda_depth"] = depth
         STATE["original_fps"] = fps
-        STATE["original_hw"] = (h, w)
-        SF_LOG.info(f"Loaded {len(frames)} frames @ {fps:.1f}fps, resolution {w}x{h}")
 
-        progress(0.1, desc=f"Loaded {len(frames)} frames @ {fps:.1f} fps")
-
-        SF_LOG.info(f"Running {model_type_str} inference...")
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        
-        is_depth_pro = "DepthPro" in model_name or "depth-pro" in model_name
-        is_depthcrafter = "DepthCrafter" in model_name
-        
-        if is_depth_pro:
-            depth = run_depth_pro_depth(frames, device=device)
-            # Depth Pro metric depth -> inverse depth (disparity) -> normalized to [0, 1] per-frame
-            inv_depth = 1.0 / np.clip(depth, 1e-4, 1e5)
-            for i in range(len(inv_depth)):
-                d_min, d_max = inv_depth[i].min(), inv_depth[i].max()
-                if d_max - d_min > 1e-6:
-                    inv_depth[i] = (inv_depth[i] - d_min) / (d_max - d_min)
-                else:
-                    inv_depth[i] = np.zeros_like(inv_depth[i])
-            depth = inv_depth
-        elif is_depthcrafter:
-            from m2svid.prepare_depthcrafter import run_depthcrafter_depth
-            depth = run_depthcrafter_depth(video_path, process_res=process_res, progress=progress)
-            # DepthCrafter is perfectly temporally consistent! DO NOT per-frame normalize it!
-            # It already outputs [0,1] global normalized disparities. 
-        else:
-            depth = run_da3_depth(
-                frames,
-                model_name=model_name,
-                process_res=process_res,
-                device=device,
-                batch_size=batch_size,
-                progress=progress,
-            )
-            depth = -depth
-            # Per-frame temporal normalization (StereoCrafter style) to completely destroy DA3's geometric jitter
-            for i in range(len(depth)):
-                d_min, d_max = depth[i].min(), depth[i].max()
-                if d_max - d_min > 1e-6:
-                    depth[i] = (depth[i] - d_min) / (d_max - d_min)
-                else:
-                    depth[i] = np.zeros_like(depth[i])
-
-        if depth.shape[1:] != (h, w):
-            depth = np.stack([cv2.resize(d, (w, h), cv2.INTER_CUBIC) for d in depth])
-
-        STATE["da3_depth"] = depth
-
-        # Save compatible npz and visual mp4 to depthmaps_videos with model-tagged suffix
-        stem = Path(video_path).stem
+        # Save compatible npz and visual mp4 to depthmaps_videos
         depth_npz = DEPTH_DIR / f"{stem}{model_suffix}_depth.npz"
         depth_mp4 = DEPTH_DIR / f"{stem}{model_suffix}_depth.mp4"
-        
+
         save_m2svid_compatible_npz(depth, str(depth_npz))
         _create_depth_preview_video(depth, str(depth_mp4), fps)
-        
+
         STATE["depth_npz"] = str(depth_npz)
         SF_LOG.info(f"Saved depth files: {depth_npz} and {depth_mp4}")
 
@@ -1156,11 +1222,8 @@ def step1_run_da3_depth(
         depth_vis_path = out_dir / "depth_preview.mp4"
         _create_depth_preview_video(depth, str(depth_vis_path), fps)
 
-        progress(1.0, desc="Depth estimation complete")
-        
-        from m2svid.prepare_da3_depth import unload_da3_model
-        unload_da3_model()
-        
+        progress(1.0, desc="VDA Depth estimation complete!")
+        unload_vda_model()
         clear_cuda()
 
         status = f"✅ {model_type_str} depth computed ({depth.shape[0]} frames). Ready for Step 2."
@@ -1169,24 +1232,26 @@ def step1_run_da3_depth(
     except Exception as e:
         clear_cuda()
         try:
-            from m2svid.prepare_da3_depth import unload_da3_model
-            unload_da3_model()
+            unload_vda_model()
         except Exception:
             pass
         clear_cuda()
+        if "stopped by user" in str(e).lower():
+            return "🛑 Estimation stopped by user.", None, None, None
         is_oom = isinstance(e, torch.OutOfMemoryError) or "out of memory" in str(e).lower() or "cuda oom" in str(e).lower()
         if is_oom:
             msg = (
                 f"❌ CUDA Out of Memory (OOM) on '{Path(video_path).name}'.\n"
                 f"💡 Recommendations:\n"
-                f"  • Reduce DA3 Resolution (e.g. 720 -> 512)\n"
-                f"  • Lower Batch Size (e.g. {batch_size} -> 1 or 2)"
+                f"  • Reduce Input Size (e.g. 518 -> 392)\n"
+                f"  • Lower Max Resolution (e.g. 1280 -> 720)\n"
+                f"  • Use Streaming mode or VDA-Base"
             )
             SF_LOG.error(f"[{model_type_str}] {msg}\nDetail: {e}")
             return msg, None, None, None
         import traceback
         traceback.print_exc()
-        return f"❌ Error in depth step: {str(e)}", None, None, None
+        return f"❌ Error in VDA depth step: {str(e)}", None, None, None
 
 
 _NVENC_AVAILABLE = None
@@ -1657,7 +1722,7 @@ def step2_run_m2svid(
 ) -> Tuple[str, str, str, str, str]:
     """
     Performs the M2SVid stage:
-    - Geometric warping using the DA3 depth
+    - Geometric warping using the estimated depth
     - 1-step conditioned generation
     Returns paths to: generated_right, sbs, anaglyph, and status
     """
@@ -2111,12 +2176,10 @@ def get_depth_video_list():
 
 
 SUFFIX_TO_LABEL = {
+    "_VDAL": "Video Depth Anything (Large)",
+    "_VDAB": "Video Depth Anything (Base)",
+    "_VDA": "Video Depth Anything",
     "_DC": "DepthCrafter",
-    "_NGL": "DA3: Nested Giant Large",
-    "_ML": "DA3: Mono Large / Metric Large",
-    "_G": "DA3: Giant",
-    "_L": "DA3: Large",
-    "_DP": "Depth Pro",
 }
 
 
@@ -2159,7 +2222,7 @@ def create_stereofaster_ui():
             </style>
             <div style='text-align: center; padding: 20px; background: linear-gradient(135deg, #101827, #0B2545); border-radius: 12px; margin-bottom: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.05);'>
                 <h1 style='color: #00F5FF; font-family: "Outfit", sans-serif; font-size: 2.8em; margin: 0; text-shadow: 0 0 20px rgba(0,245,255,0.3); font-weight: 800;'>StereoFaster</h1>
-                <p style='color: #8D99AE; font-size: 1.1em; margin-top: 5px; font-weight: 300;'>DepthCrafter + M2SVid Implementation<br>(Depth Anything V3 and Depth Pro for comparisons)</p>
+                <p style='color: #8D99AE; font-size: 1.1em; margin-top: 5px; font-weight: 300;'>Video Depth Anything (VDA) + DepthCrafter + M2SVid Stereography</p>
             </div>
             """
         )
@@ -2265,9 +2328,87 @@ def create_stereofaster_ui():
                                 iso_gen_btn = gr.Button("🏺 Generate 3D Sculpted Title Depth", variant="primary")
                                 iso_status = gr.Textbox(label="Status", interactive=False, lines=2)
 
-            # ===================== STEP 1 (NEW DEPTHCRAFTER) =====================
-            with gr.Tab("🚀 Step 1 — DepthCrafter Estimation"):
-                gr.Markdown("#### Compute temporally consistent video depth using DepthCrafter.")
+            # ===================== STEP 1 (VIDEO DEPTH ANYTHING) =====================
+            with gr.Tab("⚡ Step 1 — Video Depth Anything (VDA)"):
+                gr.Markdown("#### Ultra-fast, temporally consistent video depth using Video Depth Anything (Base & Large).")
+                with gr.Row():
+                    with gr.Column(scale=2):
+                        vda_model = gr.Dropdown(
+                            choices=[
+                                "Video-Depth-Anything-Large (vitl - 381.8M, Highest Quality)",
+                                "Video-Depth-Anything-Base (vitb - 113.1M, 2x Faster)",
+                            ],
+                            value="Video-Depth-Anything-Large (vitl - 381.8M, Highest Quality)",
+                            label="VDA Model / Encoder",
+                            info="Large (vitl) provides highest precision details. Base (vitb) runs ~2x faster with minimal quality difference."
+                        )
+                        with gr.Row():
+                            vda_mode = gr.Radio(
+                                choices=["Sliding Window (Optimal Quality & Alignment)", "Streaming (Recurrent KV Cache)"],
+                                value="Sliding Window (Optimal Quality & Alignment)",
+                                label="Inference Processing Mode",
+                                info="Sliding Window uses 32-frame overlapping chunks with keyframe alignment. Streaming uses recurrent temporal cache."
+                            )
+                        with gr.Row():
+                            vda_input_size = gr.Slider(
+                                256, 1024,
+                                value=518,
+                                step=14,
+                                label="Model Input Size (Patch Multiple: 14)",
+                                info="Resolution fed to ViT backbone. 518 is default/recommended. Lower (e.g. 392) saves VRAM; higher increases sharpness."
+                            )
+                            vda_max_res = gr.Slider(
+                                384, 1920,
+                                value=1280,
+                                step=64,
+                                label="Max Video Resolution (Longest Edge)",
+                                info="Downscales large 4K/1080p video before processing if needed, then depth is matched to video. 1280 is optimal."
+                            )
+                        with gr.Row():
+                            vda_target_fps = gr.Slider(
+                                -1.0, 60.0,
+                                value=-1.0,
+                                step=1.0,
+                                label="Target FPS (-1 = Native Source FPS)",
+                                info="Subsamples video FPS to accelerate processing if desired. Set to -1 to process every frame at native FPS."
+                            )
+                            vda_max_len = gr.Slider(
+                                -1, 3000,
+                                value=-1,
+                                step=10,
+                                label="Max Frames Limit (-1 = Full Video)",
+                                info="Limit max processed frames for quick testing. Set to -1 to process entire video."
+                            )
+                        with gr.Row():
+                            vda_global_norm = gr.Checkbox(
+                                label="Global Video Disparity Normalization",
+                                value=True,
+                                info="Normalizes disparity [0, 1] globally across the entire video. Prevents inter-frame breathing or depth pulsing."
+                            )
+                            vda_fp32 = gr.Checkbox(
+                                label="FP32 Precision (Uncheck for FP16)",
+                                value=False,
+                                info="Leave unchecked for FP16 (faster, less VRAM). Enable if seeing gradient artifacts."
+                            )
+
+                        vda_batch_depth_btn = gr.Button("📦 Run Batch VDA Depth Processing on All Source Videos", variant="secondary")
+
+                    with gr.Column(scale=1):
+                        vda_step1_dropdown = gr.Dropdown(
+                            choices=[""] + stems,
+                            value=default_stem,
+                            label="Select Source Video",
+                            interactive=True,
+                            allow_custom_value=True,
+                        )
+                        vda_step1_btn = gr.Button("⚡ Estimate Depth with VDA", variant="primary", size="lg")
+                        vda_step1_stop_btn = gr.Button("🛑 STOP", variant="stop", size="sm")
+                        vda_step1_status = gr.Textbox(label="VDA Estimation Progress", interactive=False, lines=6)
+                        vda_depth_file = gr.File(label="Download Depth .npz", type="filepath")
+
+            # ===================== STEP 1 ALT (DEPTHCRAFTER) =====================
+            with gr.Tab("⏳ Step 1 (Alt) — DepthCrafter Estimation"):
+                gr.Markdown("#### Compute temporally consistent video depth using DepthCrafter (diffusion-based).")
                 with gr.Row():
                     with gr.Column(scale=2):
                         dc_guidance_scale = gr.Slider(0.1, 10.0, value=1.0, step=0.1, label="Guidance Scale")
@@ -2296,8 +2437,8 @@ def create_stereofaster_ui():
                         dc_batch_depth_btn = gr.Button("📦 Run Batch Depth Processing on All Source Videos", variant="secondary")
                     with gr.Column(scale=1):
                         dc_step1_dropdown = gr.Dropdown(
-                            choices=[""] + get_source_video_list(),
-                            value="",
+                            choices=[""] + stems,
+                            value=default_stem,
                             label="Select Source Video",
                             interactive=True,
                             allow_custom_value=True,
@@ -2309,7 +2450,7 @@ def create_stereofaster_ui():
 
             # ===================== STEP 2 =====================
             with gr.Tab("🎬 Step 2 — M2SVid Stereography"):
-                gr.Markdown("#### Perform geometric warping and single-stepconditioned video generation.")
+                gr.Markdown("#### Perform geometric warping and single-step conditioned video generation.")
                 with gr.Row():
                     with gr.Column(scale=2):
                         disparity_perc = gr.Slider(
@@ -2350,39 +2491,6 @@ def create_stereofaster_ui():
                         out_right = gr.Video(label="Generated Right Eye", interactive=False, format="mp4")
                         out_sbs = gr.Video(label="Final Stereo SBS", interactive=False, format="mp4")
                         out_anaglyph = gr.Video(label="Final Anaglyph Red/Cyan", interactive=False, format="mp4")
-
-            # ===================== TAB 3 (OLD DEPTH) =====================
-            with gr.Tab("🛠️ Tab 3 — Other Depth Estimation Models"):
-                gr.Markdown("#### Compute depth using Depth Anything 3 or Apple Depth Pro (Legacy).")
-                with gr.Row():
-                    with gr.Column(scale=2):
-                        da3_model = gr.Dropdown(
-                            choices=[
-                                "depth-anything/DA3NESTED-GIANT-LARGE-1.1",
-                                "depth-anything/DA3MONO-LARGE",
-                                "depth-anything/DA3-GIANT-1.1",
-                                "depth-anything/DA3-LARGE-1.1",
-                                "depth-anything/DA3METRIC-LARGE",
-                                "apple/DepthPro",
-                            ],
-                            value="depth-anything/DA3NESTED-GIANT-LARGE-1.1",
-                            label="Depth Estimation Model",
-                        )
-                        process_res = gr.Slider(384, 1024, value=720, step=32, label="DA3 Resolution")
-                        batch_size = gr.Slider(1, 32, value=_VRAM_DEFAULTS["da3"], step=1, label="DA3 Batch Size")
-                        batch_depth_btn = gr.Button("📦 Run Batch Depth Processing on All Source Videos", variant="secondary")
-                    with gr.Column(scale=1):
-                        step1_dropdown = gr.Dropdown(
-                            choices=[""] + get_source_video_list(),
-                            value="",
-                            label="Select Source Video",
-                            interactive=True,
-                            allow_custom_value=True,
-                        )
-                        step1_btn = gr.Button("⚡ Estimate Depth for Selected Video", variant="primary", size="lg")
-                        step1_stop_btn = gr.Button("🛑 STOP", variant="stop", size="sm")
-                        step1_status = gr.Textbox(label="Estimation Progress", interactive=False, lines=6)
-                        depth_file = gr.File(label="Download Depth .npz", type="filepath")
                         out_dir_box = gr.Textbox(label="Output Directory (all files)", interactive=False)
 
         # In-memory depth tracking
@@ -2392,7 +2500,7 @@ def create_stereofaster_ui():
         # Wire dropdown updates
         def _on_hub_select(stem):
             if not stem:
-                return None, None, None, None, "16:9 (None)", "", None
+                return None, None, None, None, "16:9 (None)", "", None, gr.update(), gr.update(), gr.update(), gr.update()
 
             v_p, d_npz, d_mp4_p = select_source_video(stem)
             
@@ -2406,12 +2514,38 @@ def create_stereofaster_ui():
             if v_p:
                 preset_val, res_val, preview_crop = analyze_letterbox(v_p)
                 
-            return v_p, d_mp4_p, d_npz, d_npz, preset_val, res_val, preview_crop, gr.update(value=stem), gr.update(value=stem)
+            return (
+                v_p,
+                d_mp4_p,
+                d_npz,
+                d_npz,
+                preset_val,
+                res_val,
+                preview_crop,
+                gr.update(value=stem),
+                gr.update(value=stem),
+                gr.update(value=stem),
+                gr.update(value=stem),
+            )
             
+        hub_outputs = [
+            preview_video,
+            preview_depth,
+            depth_input,
+            depth_state,
+            crop_preset,
+            crop_res,
+            crop_preview_state,
+            desat_clip_dropdown,
+            iso_clip_dropdown,
+            vda_step1_dropdown,
+            dc_step1_dropdown,
+        ]
+
         source_dropdown.change(
             fn=_on_hub_select,
             inputs=[source_dropdown],
-            outputs=[preview_video, preview_depth, depth_input, depth_state, crop_preset, crop_res, crop_preview_state, desat_clip_dropdown, iso_clip_dropdown],
+            outputs=hub_outputs,
         )
         
         def _toggle_preview(current_video, crop_preview, stem):
@@ -2432,7 +2566,7 @@ def create_stereofaster_ui():
         )
         
         def _apply_crop_and_refresh(stem, preset):
-            if not stem: return gr.update(), gr.update()
+            if not stem: return gr.update(), gr.update(), gr.update()
             v_p, _, _ = select_source_video(stem)
             if v_p:
                 execute_crop(v_p, preset)
@@ -2440,13 +2574,17 @@ def create_stereofaster_ui():
             src = get_source_video_list()
             new_stem = f"{stem}_cropped"
             if new_stem in src:
-                return gr.update(choices=[""] + src, value=new_stem), gr.update(choices=[""] + src, value=new_stem)
-            return gr.update(choices=[""] + src), gr.update(choices=[""] + src)
+                return (
+                    gr.update(choices=[""] + src, value=new_stem),
+                    gr.update(choices=[""] + src, value=new_stem),
+                    gr.update(choices=[""] + src, value=new_stem),
+                )
+            return gr.update(choices=[""] + src), gr.update(choices=[""] + src), gr.update(choices=[""] + src)
             
         apply_crop_btn.click(
             fn=_apply_crop_and_refresh,
             inputs=[source_dropdown, crop_preset],
-            outputs=[source_dropdown, step1_dropdown],
+            outputs=[source_dropdown, vda_step1_dropdown, dc_step1_dropdown],
         )
 
         # Wire uploaders
@@ -2457,7 +2595,7 @@ def create_stereofaster_ui():
         ).then(
             fn=_on_hub_select,
             inputs=[source_dropdown],
-            outputs=[preview_video, preview_depth, depth_input, depth_state, crop_preset, crop_res, crop_preview_state],
+            outputs=hub_outputs,
         )
         
         depth_uploader.upload(
@@ -2467,21 +2605,64 @@ def create_stereofaster_ui():
         ).then(
             fn=_on_hub_select,
             inputs=[source_dropdown],
-            outputs=[preview_video, preview_depth, depth_input, depth_state, crop_preset, crop_res, crop_preview_state],
+            outputs=hub_outputs,
         )
 
-        # Wire step 1 (DepthCrafter)
+        # Wire Step 1 (Video Depth Anything)
+        vda_step1_btn.click(
+            fn=step1_run_vda_depth,
+            inputs=[
+                vda_step1_dropdown,
+                vda_model,
+                vda_mode,
+                vda_input_size,
+                vda_max_res,
+                vda_target_fps,
+                vda_max_len,
+                vda_fp32,
+                vda_global_norm,
+            ],
+            outputs=[vda_step1_status, preview_depth, vda_depth_file, depth_state],
+        )
+        vda_step1_stop_btn.click(fn=trigger_cancel, outputs=[vda_step1_status])
+
+        vda_batch_depth_btn.click(
+            fn=run_vda_on_source_videos,
+            inputs=[
+                vda_model,
+                vda_mode,
+                vda_input_size,
+                vda_max_res,
+                vda_target_fps,
+                vda_max_len,
+                vda_fp32,
+                vda_global_norm,
+            ],
+            outputs=[vda_batch_depth_btn, source_dropdown, depth_dropdown, vda_step1_dropdown, vda_step1_status],
+        )
+
+        # Wire Step 1 (DepthCrafter)
         dc_step1_btn.click(
             fn=step1_run_depthcrafter,
             inputs=[dc_step1_dropdown, dc_max_res, dc_guidance_scale, dc_inference_steps, dc_window_size, dc_overlap, dc_attn_slicing, dc_cpu_offload],
             outputs=[dc_step1_status, preview_depth, dc_depth_file, depth_state],
         )
+        dc_step1_stop_btn.click(fn=trigger_cancel, outputs=[dc_step1_status])
 
-        # Wire step 1 (Old DA3)
-        step1_btn.click(
-            fn=step1_run_da3_depth,
-            inputs=[step1_dropdown, da3_model, process_res, batch_size],
-            outputs=[step1_status, preview_depth, depth_file, depth_state],
+        dc_batch_depth_btn.click(
+            fn=run_depth_on_source_videos,
+            inputs=[
+                gr.Textbox(value="tencent/DepthCrafter", visible=False),
+                dc_max_res,
+                gr.Slider(value=1, visible=False),
+                dc_guidance_scale,
+                dc_inference_steps,
+                dc_window_size,
+                dc_overlap,
+                dc_attn_slicing,
+                dc_cpu_offload,
+            ],
+            outputs=[dc_batch_depth_btn, source_dropdown, depth_dropdown, dc_step1_dropdown, dc_step1_status],
         )
 
         # Sync state
@@ -2494,7 +2675,7 @@ def create_stereofaster_ui():
         batch_crop_btn.click(
             fn=batch_auto_crop_all,
             inputs=[force_crop_preset, crop_preset],
-            outputs=[batch_crop_btn, source_dropdown, step1_dropdown],
+            outputs=[batch_crop_btn, source_dropdown, vda_step1_dropdown, dc_step1_dropdown],
         )
 
         # Wire step 2
@@ -2516,31 +2697,9 @@ def create_stereofaster_ui():
             ],
             outputs=[step2_status, out_right, out_sbs, out_anaglyph, out_dir_box],
         )
-        dc_step1_stop_btn.click(fn=trigger_cancel, outputs=[dc_step1_status])
-        step1_stop_btn.click(fn=trigger_cancel, outputs=[step1_status])
         step2_stop_btn.click(fn=trigger_cancel, outputs=[step2_status])
 
-        # Batch buttons
-        dc_batch_depth_btn.click(
-            fn=run_depth_on_source_videos,
-            inputs=[
-                gr.Textbox(value="tencent/DepthCrafter", visible=False),
-                dc_max_res,
-                gr.Slider(value=1, visible=False),
-                dc_guidance_scale,
-                dc_inference_steps,
-                dc_window_size,
-                dc_overlap,
-                dc_attn_slicing,
-                dc_cpu_offload,
-            ],
-            outputs=[dc_batch_depth_btn, source_dropdown, depth_dropdown, dc_step1_dropdown, dc_step1_status],
-        )
-        batch_depth_btn.click(
-            fn=run_depth_on_source_videos,
-            inputs=[da3_model, process_res, batch_size],
-            outputs=[batch_depth_btn, source_dropdown, depth_dropdown, step1_dropdown, step1_status],
-        )
+        # Batch M2SVid stereography
         batch_m2svid_btn.click(
             fn=run_m2svid_on_pairs,
             inputs=[m2svid_config, m2svid_ckpt, disparity_perc, convergence_point, closing_kernel, mask_antialias, warping_batch_size, gen_chunk_size, m2svid_process_res, gen_batch_size],
@@ -2577,7 +2736,7 @@ def create_stereofaster_ui():
         refresh_btn.click(
             fn=_refresh_hub,
             inputs=[],
-            outputs=[source_dropdown, depth_dropdown, step1_dropdown, dc_step1_dropdown, desat_clip_dropdown, iso_clip_dropdown],
+            outputs=[source_dropdown, depth_dropdown, vda_step1_dropdown, dc_step1_dropdown, desat_clip_dropdown, iso_clip_dropdown],
         )
         
         # Wire depth dropdown to update preview
@@ -2613,5 +2772,5 @@ if __name__ == "__main__":
     parser.add_argument("--share", action="store_true")
     args = parser.parse_args()
 
-    print("Launching StereoFaster WebUI (DA3 + M2SVid 2-step pipeline)...")
+    print("Launching StereoFaster WebUI (VDA + DepthCrafter + M2SVid 2-step pipeline)...")
     launch(server_name=args.server_name, server_port=args.server_port, share=args.share)

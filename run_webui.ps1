@@ -13,9 +13,9 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  StereoFaster WebUI Launcher" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "Setting PYTHONPATH for DA3 + M2SVid..." -ForegroundColor Yellow
+Write-Host "Setting PYTHONPATH for VDA + DepthCrafter + M2SVid..." -ForegroundColor Yellow
 
-$env:PYTHONPATH = "Depth-Anything-3/src;.;m2svid/third_party/Hi3D-Official;m2svid/third_party/pytorch-msssim;$env:PYTHONPATH"
+$env:PYTHONPATH = "m2svid/third_party/Video-Depth-Anything;.;m2svid/third_party/Hi3D-Official;m2svid/third_party/pytorch-msssim;$env:PYTHONPATH"
 
 Write-Host "PYTHONPATH set." -ForegroundColor Green
 Write-Host ""
