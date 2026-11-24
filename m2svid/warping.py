@@ -68,13 +68,22 @@ def process_video_with_depth(
         )
         return reproj_img, inpaint_mask
 
+    total_depth_frames = relative_depth.shape[0]
     for i, left_frames in enumerate(
         tqdm.tqdm(
             read_frames_in_batches_ffmpeg(video_path, batch_size, width, height),
-            total=int(relative_depth.shape[0] // batch_size),
+            total=int(np.ceil(total_depth_frames / batch_size)),
         )
     ):
-        depth_batch = relative_depth[i * batch_size : (i + 1) * batch_size]
+        start_idx = i * batch_size
+        if start_idx >= total_depth_frames:
+            break
+        end_idx = min(start_idx + batch_size, total_depth_frames)
+        depth_batch = relative_depth[start_idx:end_idx]
+        left_frames = left_frames[:len(depth_batch)]
+        if len(left_frames) == 0:
+            break
+
         depth_batch = np.array([
             cv2.resize(depth_frame, (width, height), interpolation=cv2.INTER_CUBIC)
             for depth_frame in depth_batch

@@ -9,11 +9,13 @@
 
 1. [Core Philosophy: 1:1 Native Resolution Depth](#core-philosophy-11-native-resolution-depth)
 2. [Quickstart & Launching](#quickstart--launching)
-3. [The 4-Tab WebUI Interface](#the-4-tab-webui-interface)
-   - [Tab 1: 📁 File & Preview Hub](#tab-1--file--preview-hub-input-center)
-   - [Tab 2: ⚡ Step 1 — Video Depth Anything (VDA)](#tab-2--step-1--video-depth-anything-vda)
-   - [Tab 3: ⏳ Step 1 (Alt) — DepthCrafter Estimation](#tab-3--step-1-alt--depthcrafter-estimation)
-   - [Tab 4: 🎬 Step 2 — M2SVid Stereography](#tab-4--step-2--m2svid-stereography)
+3. [The 6-Tab WebUI Interface](#the-6-tab-webui-interface)
+   - [Tab 1: 📁 File & Preview Hub](#tab-1--file--preview-hub-input-center--title-depth-tools)
+   - [Tab 2: 🚀 Auto-Pipeline & Benchmark (Sidecar Configured)](#tab-2--auto-pipeline--benchmark-sidecar-configured)
+   - [Tab 3: ⏳ Step 1 — DepthCrafter Estimation](#tab-3--step-1--depthcrafter-estimation-primary-depth-estimator)
+   - [Tab 4: ⚡ Step 1 (Alt) — FlashDepth (Real-Time 2K Streaming)](#tab-4--step-1-alt--flashdepth-real-time-2k-streaming)
+   - [Tab 5: 🎬 Step 2 — M2SVid Stereography](#tab-5--step-2--m2svid-stereography-inpainting--synthesis)
+   - [Tab 6: ⚡ Step 1 (Alt) — Video Depth Anything (VDA)](#tab-6--step-1-alt--video-depth-anything-vda-fast-alternative)
 4. [The Fine-Detail Preservation Law: Hair, Faces & Thin Edges](#the-fine-detail-preservation-law-hair-faces--thin-edges)
 5. [GPU Optimization & 1:1 Native Resolution Settings Matrix](#gpu-optimization--11-native-resolution-settings-matrix)
    - [RTX 3060 (12 GB)](#1-rtx-3060-12-gb-local-workhorse)
@@ -72,7 +74,7 @@ docker run -d --gpus all \
 
 ---
 
-## The 4-Tab WebUI Interface
+## The 5-Tab WebUI Interface
 
 ### Tab 1: 📁 File & Preview Hub (Input Center & Title Depth Tools)
 
@@ -85,30 +87,33 @@ docker run -d --gpus all \
 
 ---
 
-### Tab 2: ⚡ Step 1 — Video Depth Anything (VDA)
+### Tab 2: 🚀 Auto-Pipeline & Benchmark (Sidecar Configured)
 
-Video Depth Anything produces temporally smooth, high-fidelity relative depth maps at blazingly fast inference speeds (70–80+ FPS on RTX 5090).
+Automated end-to-end processing pipeline driving DepthCrafter, Video Depth Anything (VDA), and M2SVid. Eliminates blind execution: all settings are explicitly saved to and loaded from `pipeline_sidecar.json`.
 
-| Parameter | Recommended Setting | Options / Range | Purpose |
-|---|---|---|---|
-| **VDA Model / Encoder** | **`Video-Depth-Anything-Large (vitl)`** | `vitl` (381.8M), `vitb` (113.1M) | Large offers peak edge sharpness and detail; Base runs ~2× faster with minimal quality difference. |
-| **Inference Mode** | **`Sliding Window`** | `Sliding Window`, `Streaming` | Sliding window runs 32-frame overlapping chunks with scale/shift alignment. Streaming uses recurrent KV cache for low-memory continuous streaming. |
-| **Model Input Size** | **`518`** | 256–1024 (multiples of 14) | Resolution fed into the ViT backbone. 518 is the optimal default; 392 saves VRAM on low-memory cards. |
-| **Max Resolution (Longest Edge)** | **`1280`** | 384–1920 | Scales video before processing if needed; depth is resized to match original video dimensions. |
-| **Target FPS** | **`-1` (Native FPS)** | -1.0 to 60.0 | Subsample video FPS if desired; `-1` preserves full native frame rate. |
-| **Max Frames Limit** | **`-1` (Full Video)** | -1 to 3000 | Limit total frames for rapid testing; `-1` processes entire video. |
-| **Global Disparity Normalization** | **`True`** | Checkbox | Computes global minimum and maximum across the entire video. Prevents depth pulsing or breathing across frames. |
-| **FP32 Precision** | **`False` (FP16)** | Checkbox | Uncheck for faster FP16 inference; enable if seeing precision gradient banding. |
-
-- **Outputs:**
-  - `depthmaps_videos/<stem>_VDAL_depth.npz` (or `_VDAB_depth.npz`): Compressed array containing normalized relative disparity ($1.0 = \text{near}, 0.0 = \text{far}$).
-  - `depthmaps_videos/<stem>_VDAL_depth.mp4`: Grayscale preview video.
+#### Workflow:
+1. **Upload Clips:** Drop video files into `source_videos/` (via FileBrowser or Tab 1).
+2. **Configure Sidecar:** Select or fine-tune parameters for DepthCrafter, VDA, and M2SVid. Click **💾 Save Pipeline Sidecar**.
+3. **Select Active Stages:** Choose any combination:
+   - **All 3 Stages:** DepthCrafter + VDA + M2SVid
+   - **Single Stage Only:** DepthCrafter only, VDA only, or M2SVid only
+   - **Dual Depth Models:** DepthCrafter + VDA (without M2SVid)
+   - **Standard Pipeline:** DepthCrafter + M2SVid, or VDA + M2SVid
+4. **Pre-Flight Validation:** Interactive banner verifies dependencies in real-time (e.g., warns if M2SVid is selected alone without existing depth maps).
+5. **Multi-Sample 3-Tier Benchmark:** Click **⚡ Run Multi-Sample Benchmark & Predict Time/Cost**:
+   - Tests 3 representative clips: **Short** ($\le 6$s), **Medium** (6–18s), and **Longest** in library.
+   - Outputs per-stage runtimes, processing speeds (FPS), realtime-to-render ratios, total project hours, and estimated cloud rental cost.
+   - **Test samples are auto-promoted**: saved directly to output directories and automatically skipped in the batch run.
+6. **Timer Guidance & Batch Execution:**
+   - The benchmark report provides a clear timer recommendation: `🔔 Set your timer for X MINUTES`.
+   - Click **▶️ Start Prioritized Batch Queue (Short ➔ Long)** to process the library.
+   - Features **Per-Stage Auto-Skip** (skips already-generated depth maps or stereo videos) and **Audio Passthrough** (preserves source audio tracks).
 
 ---
 
-### Tab 3: ⏳ Step 1 (Alt) — DepthCrafter Estimation (Diffusion-Based Depth)
+### Tab 3: ⏳ Step 1 — DepthCrafter Estimation (Primary Depth Estimator)
 
-Estimates continuous, flicker-free video depth using the DepthCrafter video diffusion model.
+Estimates continuous, flicker-free, and anatomically robust video depth using the DepthCrafter video diffusion model. Recommended as the primary depth estimator for scenes with fast action, dancing, martial arts, moving limbs, and low-light environments.
 
 | Parameter | Recommended (RTX 5090 32GB) | Recommended (24GB GPUs) | Range | Purpose |
 |---|---|---|---|---|
@@ -126,9 +131,31 @@ Estimates continuous, flicker-free video depth using the DepthCrafter video diff
 
 ---
 
-### Tab 4: 🎬 Step 2 — M2SVid Stereography (Inpainting & Synthesis)
+### Tab 4: ⚡ Step 1 (Alt) — FlashDepth (Real-Time 2K Streaming)
 
-Synthesizes the right-eye view through geometric warping and 1-step video diffusion inpainting.
+FlashDepth (Netflix Eyeline Studios) combines high-resolution boundary sharpness with real-time video depth estimation using a dual-stream hybrid architecture and Mamba state space models:
+- **Stream 1 (Coarse/Semantic Stream):** A frozen vision transformer (e.g. Depth Anything ViT-L) running at 480p/576p produces rich, accurate scene-wide relative depth semantics.
+- **Stream 2 (Fine Boundary Stream):** A convolutional/Mamba recurrent network ingesting full 2K resolution image frames and predicting high-frequency geometric detail and razor-sharp silhouette edges.
+- **Mamba State Space Fusion:** Propagates temporal consistency without the quadratic $O(T^2)$ memory scaling of full attention, achieving **24–35+ FPS streaming** directly on consumer GPUs (RTX 3060/4090).
+
+| Parameter | Recommended Setting | Options / Range | Purpose |
+|---|---|---|---|
+| **Model Variant** | **`FlashDepth (Full) - 2K VFX Hybrid`** | `FlashDepth (Full)`, `FlashDepth-L`, `FlashDepth-S` | **Full:** Dual-stream 2K hybrid for sharpest VFX edges at 24+ FPS.<br>**Large:** Standalone ViT-L best for 480p.<br>**Small:** Lightweight for ultra-low VRAM. |
+| **Max Resolution** | **`1280 (Multiple of 14)`** | 256–2048 | Max video edge streamed through FlashDepth (1280 recommended for 12GB GPUs, 2044 for full 2K on 24GB+ GPUs). |
+| **Target FPS** | **`-1 (Native Source FPS)`** | `-1`, `30`, `24`, `15` | Native preserves source frame rate. Caps high-framerate video if needed. |
+| **Global Disparity Normalization** | **`True`** | Checkbox | Stabilizes near/far disparity bounds across entire video to prevent breathing. |
+| **Invert Depth Map** | **`False`** | Checkbox | White = closest to camera, Black = furthest away. |
+| **Max Frames Limit** | **`-1` (Full Video)** | Number | Limit total frames for fast testing; `-1` processes the complete video. |
+
+- **Outputs:**
+  - `depthmaps_videos/<stem>_FDF_depth.npz` (or `_FDL`, `_FDS`): Compressed array containing normalized relative disparity ($1.0 = \text{near}, 0.0 = \text{far}$).
+  - `depthmaps_videos/<stem>_FDF_depth.mp4`: Grayscale preview video.
+
+---
+
+### Tab 5: 🎬 Step 2 — M2SVid Stereography (Inpainting & Synthesis)
+
+Synthesizes the right-eye view through geometric warping and 1-step video diffusion inpainting. Includes automatic audio passthrough from the source video.
 
 | Parameter | Recommended (RTX 5090 32GB) | Value (General 24GB+) | Description |
 |---|---|---|---|
@@ -140,6 +167,28 @@ Synthesizes the right-eye view through geometric warping and 1-step video diffus
 | **Convergence Point (Zero Parallax)** | `0.5` | `0.5` | Sets the screen-plane depth. Main subjects sit flush with the display; foreground pops out, background recedes. |
 | **Mask Closing Kernel** | `11` | `11` | Morphological dilation kernel for disocclusion cleanup. |
 | **Mask Antialias** | `False` | `False` | Prevents edge softening on disocclusion holes. |
+
+---
+
+### Tab 6: ⚡ Step 1 (Alt) — Video Depth Anything (VDA - Fast Alternative)
+
+Video Depth Anything produces temporally smooth, high-fidelity relative depth maps at blazingly fast feedforward speeds (70–80+ FPS on RTX 5090). Best suited for static or slow-panning scenes; for rapid motion or complex limb articulation, DepthCrafter is recommended.
+
+| Parameter | Recommended Setting | Options / Range | Purpose |
+|---|---|---|---|
+| **VDA Model / Encoder** | **`Video-Depth-Anything-Large (vitl)`** | `vitl` (381.8M), `vitb` (113.1M) | Large offers peak edge sharpness and detail; Base runs ~2× faster with minimal quality difference. |
+| **Inference Mode** | **`Sliding Window`** | `Sliding Window`, `Streaming` | Sliding window runs 32-frame overlapping chunks with scale/shift alignment. Streaming uses recurrent KV cache for low-memory continuous streaming. |
+| **Model Input Size** | **`518`** | 256–1024 (multiples of 14) | Resolution fed into the ViT backbone. 518 is the optimal default; 392 saves VRAM on low-memory cards. |
+| **Max Resolution (Longest Edge)** | **`1280`** | 384–1920 | Scales video before processing if needed; depth is resized to match original video dimensions. |
+| **Target FPS** | **`-1` (Native FPS)** | -1.0 to 60.0 | Subsample video FPS if desired; `-1` preserves full native frame rate. |
+| **Max Frames Limit** | **`-1` (Full Video)** | -1 to 3000 | Limit total frames for rapid testing; `-1` processes entire video. |
+| **Global Disparity Normalization** | **`True`** | Checkbox | Computes global minimum and maximum across the entire video. Prevents depth pulsing or breathing across frames. |
+| **FP32 Precision** | **`False` (FP16)** | Checkbox | Uncheck for faster FP16 inference; enable if seeing precision gradient banding. |
+| **Invert Depth Map** | **`False`** | Checkbox | Default: Off (White = closest to camera, Black = furthest away). |
+
+- **Outputs:**
+  - `depthmaps_videos/<stem>_VDAL_depth.npz` (or `_VDAB_depth.npz`): Compressed array containing normalized relative disparity ($1.0 = \text{near}, 0.0 = \text{far}$).
+  - `depthmaps_videos/<stem>_VDAL_depth.mp4`: Grayscale preview video.
 
 ---
 

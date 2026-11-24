@@ -1,0 +1,49 @@
+{
+  "version": "1.0",
+  "hardware_profile": "RTX 3060 / 4060 (12GB - 16GB VRAM)",
+  "cloud_vast_rate_per_hour": 0.5,
+  "stages_enabled": {
+    "depthcrafter": true,
+    "vda": false,
+    "m2svid": true
+  },
+  "depth_priority": "DepthCrafter",
+  "depthcrafter_settings": {
+    "guidance_scale": 1.0,
+    "inference_steps": 5,
+    "window_size": 30,
+    "overlap": 10,
+    "max_res": 1024,
+    "attn_slicing": "Auto (Adapts to GPU VRAM)",
+    "cpu_offload": "model"
+  },
+  "vda_settings": {
+    "model": "Large (vitl - Recommended)",
+    "mode": "sliding_window",
+    "input_size": 644,
+    "max_res": 1024,
+    "target_fps": -1,
+    "max_len": -1,
+    "fp32": false,
+    "global_norm": true,
+    "invert_depth": false
+  },
+  "m2svid_settings": {
+    "processing_res": "Native",
+    "disparity_perc": 20.0,
+    "convergence_point": 0.5,
+    "closing_kernel": 11,
+    "mask_antialias": false,
+    "warping_batch_size": 8,
+    "gen_chunk_size": 5,
+    "gen_batch_size": 1
+  },
+  "auto_crop": {
+    "enabled": true,
+    "force_preset": false,
+    "manual_preset": "16:9 (None)"
+  },
+  "audio_passthrough": {
+    "enabled": true
+  }
+}

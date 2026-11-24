@@ -59,17 +59,20 @@ fi
 # =============================================================================
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 export CUDA_MODULE_LOADING="LAZY"
+export PYTHONPATH="/workspace/m2svid-DA3_DP:/workspace/m2svid-DA3_DP/m2svid/third_party/ICDepth:/workspace/m2svid-DA3_DP/m2svid/third_party/FlashDepth:/workspace/m2svid-DA3_DP/m2svid/third_party/Video-Depth-Anything:/workspace/m2svid-DA3_DP/m2svid/third_party/Hi3D-Official:/workspace/m2svid-DA3_DP/m2svid/third_party/pytorch-msssim:${PYTHONPATH}"
 
-# Override temporary directory to prevent Vast.ai's tiny 64MB /tmp partition from crashing video uploads
+# Override temporary directory to prevent Vast.ai / RunPod small /tmp partitions from crashing video uploads
 export GRADIO_TEMP_DIR="/workspace/m2svid-DA3_DP/tmp"
 export TMPDIR="/workspace/m2svid-DA3_DP/tmp"
-mkdir -p /workspace/m2svid-DA3_DP/tmp
+mkdir -p /workspace/m2svid-DA3_DP/tmp /workspace/m2svid-DA3_DP/source_videos /workspace/m2svid-DA3_DP/depthmaps_videos /workspace/m2svid-DA3_DP/final_videos
 
 # =============================================================================
 # 4. Launch StereoFaster WebUI
 # =============================================================================
+PORT="${GRADIO_SERVER_PORT:-7878}"
 echo "==============================================================="
-echo "🌐 Starting StereoFaster WebUI on port 7878..."
+echo "🌐 Starting StereoFaster WebUI on port ${PORT}..."
 echo "==============================================================="
-python webui.py --server-name 0.0.0.0 --server-port 7878
+cd /workspace/m2svid-DA3_DP
+python webui.py --server-name 0.0.0.0 --server-port "${PORT}"
 

@@ -94,13 +94,15 @@ def run_vda_depth(
     max_len: int = -1,
     fp32: bool = False,
     global_norm: bool = True,
+    invert_depth: bool = False,
     progress=None
 ) -> Tuple[np.ndarray, float]:
     """
     Run Video Depth Anything inference on an input video.
     Returns:
         (depth_array, fps) where depth_array is (T, H, W) in float32 [0.0, 1.0]
-        normalized disparity (1.0 = near, 0.0 = far) compatible with M2SVid warping.
+        normalized disparity (1.0 / White = closest to camera, 0.0 / Black = furthest away)
+        compatible with M2SVid warping and preview videos.
     """
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = get_vda_model(encoder=encoder, metric=False, device=device)
@@ -174,6 +176,7 @@ def run_vda_depth(
         stream_model.load_state_dict(model.state_dict(), strict=False)
         
         depths_list = []
+        t_stream_start = time.time()
         for i, f in enumerate(frames):
             import sys
             if getattr(sys.modules.get('__main__', None), 'GLOBAL_CANCEL', False):
@@ -182,33 +185,45 @@ def run_vda_depth(
                 
             d = stream_model.infer_video_depth_one(f, input_size=input_size, device=device, fp32=fp32)
             depths_list.append(d)
-            if progress and (i % 10 == 0 or i == num_frames - 1):
-                try: progress(0.15 + 0.75 * (i + 1) / num_frames, desc=f"VDA Streaming: frame {i+1}/{num_frames}")
-                except Exception: pass
+            if i % 10 == 0 or i == num_frames - 1:
+                elapsed = time.time() - t_stream_start
+                curr_fps = (i + 1) / max(elapsed, 1e-4)
+                print(f"[VDA Stream] ⏳ Frame {i+1}/{num_frames} ({curr_fps:.1f} FPS, {elapsed:.1f}s elapsed)...", flush=True)
+                if progress:
+                    try: progress(0.15 + 0.75 * (i + 1) / num_frames, desc=f"VDA Streaming: frame {i+1}/{num_frames} ({curr_fps:.1f} FPS)")
+                    except Exception: pass
         raw_depths = np.stack(depths_list, axis=0)
         del stream_model
     else:
         # Standard sliding-window mode (32-frame chunks with 10 overlap + keyframe alignment)
         frames_arr = np.array(frames)
         
-        # We run the infer_video_depth logic
+        # We run the infer_video_depth logic with progress callback
         raw_depths, _ = model.infer_video_depth(
             frames_arr,
             fps,
             input_size=input_size,
             device=device,
-            fp32=fp32
+            fp32=fp32,
+            progress=progress
         )
 
-    # In VDA, values represent camera depth (smaller = near, larger = far).
-    # M2SVid expects disparity/inverse-depth where larger = near (1.0) and smaller = far (0.0).
-    disp = -raw_depths.astype(np.float32)
+    # In VDA (based on Depth Anything V2), output values represent relative depth / disparity:
+    # Larger values = closer to the camera (foreground)
+    # Smaller values = further away from the camera (background)
+    # Standard stereography & depth video convention:
+    # 1.0 (Absolute White) = closest to camera
+    # 0.0 (Absolute Black) = furthest away from camera
+    disp = raw_depths.astype(np.float32)
+    if invert_depth:
+        disp = -disp
     
     if global_norm:
         # Global video normalization preserves global scale consistency across all frames
         d_min, d_max = float(disp.min()), float(disp.max())
         denom = (d_max - d_min) if (d_max - d_min) > 1e-6 else 1.0
         norm_depth = (disp - d_min) / denom
+        print(f"[VDA] 📊 Global disparity stats: raw_min={d_min:.3f}, raw_max={d_max:.3f} -> normalized to [0.0, 1.0] (White=Near, Black=Far)", flush=True)
     else:
         # Per-frame normalization
         norm_depth = np.empty_like(disp, dtype=np.float32)

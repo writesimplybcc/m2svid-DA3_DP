@@ -13,6 +13,8 @@ WORKDIR /workspace/m2svid-DA3_DP
 # Copy ALL your code (this replaces/adds to the base files)
 # Core files
 COPY webui.py .
+COPY pipeline_sidecar.py .
+COPY pipeline_sidecar.json .
 COPY run_webui.ps1 .
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -22,13 +24,26 @@ COPY start-with-filebrowser.sh .
 COPY entrypoint.sh .
 
 # Your WEBUI dependency folders and documentation
-COPY Depth-Anything-3/ ./Depth-Anything-3/
 COPY m2svid/ ./m2svid/
 COPY hi3D/ ./hi3D/
 COPY docs/ ./docs/
 
-# Create necessary I/O folders
-RUN mkdir -p source_videos depthmaps_videos final_videos scratch ckpts checkpoints
+# Install FlashDepth & ICDepth dependencies and bundled Mamba package (Triton SSM)
+RUN pip install --no-cache-dir hydra-core einops ftfy && \
+    if [ -f "m2svid/third_party/FlashDepth/mamba/setup.py" ]; then \
+        cd m2svid/third_party/FlashDepth/mamba && \
+        MAMBA_SKIP_CUDA_BUILD=TRUE pip install --no-build-isolation --no-deps . && \
+        cd /workspace/m2svid-DA3_DP; \
+    fi
+
+# Set PYTHONPATH for all subprojects (ICDepth, FlashDepth, VDA, Hi3D, M2SVid)
+ENV PYTHONPATH="/workspace/m2svid-DA3_DP:/workspace/m2svid-DA3_DP/m2svid/third_party/ICDepth:/workspace/m2svid-DA3_DP/m2svid/third_party/FlashDepth:/workspace/m2svid-DA3_DP/m2svid/third_party/FlashDepth/mamba:/workspace/m2svid-DA3_DP/m2svid/third_party/Video-Depth-Anything:/workspace/m2svid-DA3_DP/m2svid/third_party/Hi3D-Official:/workspace/m2svid-DA3_DP/m2svid/third_party/pytorch-msssim"
+
+# Create necessary I/O folders and keep a backup image snapshot in /opt/stereofaster_app
+# so RunPod's runtime /workspace volume mount never hides the application code
+RUN mkdir -p source_videos depthmaps_videos final_videos scratch ckpts checkpoints && \
+    mkdir -p /opt/stereofaster_app && \
+    cp -a /workspace/m2svid-DA3_DP/. /opt/stereofaster_app/
 
 # Install FileBrowser
 RUN curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | bash

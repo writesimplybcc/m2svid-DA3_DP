@@ -1,0 +1,65 @@
+[
+  {
+    "engine": "Video Depth Anything",
+    "config": "ViT-Base (vitb)",
+    "time_sec": 23.26,
+    "fps": 2.24,
+    "peak_vram_gb": 4.08,
+    "mp4": "/tmp/stereofaster_depth_9981g0ty/depth_preview.mp4",
+    "npz": "/app/depthmaps_videos/IWD480_V2-0123_VDAB_depth.npz"
+  },
+  {
+    "engine": "FlashDepth",
+    "config": "2K VFX Hybrid",
+    "time_sec": 106.07,
+    "fps": 0.49,
+    "peak_vram_gb": 2.31,
+    "mp4": "/tmp/stereofaster_depth_synkbnpp/depth_preview.mp4",
+    "npz": "/app/depthmaps_videos/IWD480_V2-0123_FDF_depth.npz"
+  },
+  {
+    "engine": "Video Depth Anything",
+    "config": "ViT-Large (vitl)",
+    "time_sec": 70.83,
+    "fps": 0.73,
+    "peak_vram_gb": 8.46,
+    "mp4": "/tmp/stereofaster_depth_31g49vsh/depth_preview.mp4",
+    "npz": "/app/depthmaps_videos/IWD480_V2-0123_VDAL_depth.npz"
+  },
+  {
+    "engine": "FlashDepth",
+    "config": "ViT-Large Standalone",
+    "time_sec": 49.66,
+    "fps": 1.05,
+    "peak_vram_gb": 2.2,
+    "mp4": "/tmp/stereofaster_depth_05lklqgo/depth_preview.mp4",
+    "npz": "/app/depthmaps_videos/IWD480_V2-0123_FDL_depth.npz"
+  },
+  {
+    "engine": "DepthCrafter",
+    "config": "Diffusion 5-Step, Win 30",
+    "time_sec": 117.92,
+    "fps": 0.44,
+    "peak_vram_gb": 5.55,
+    "mp4": "/app/depthmaps_videos/IWD480_V2-0123_DC_depth.mp4",
+    "npz": "/app/depthmaps_videos/IWD480_V2-0123_DC_depth.npz"
+  },
+  {
+    "engine": "ICDepth (Fast Mode)",
+    "config": "3 Steps, CFG 1.0, Credits ON",
+    "time_sec": 125.81,
+    "fps": 0.41,
+    "peak_vram_gb": 6.73,
+    "mp4": "/tmp/stereofaster_depth_o8uinmcz/depth_preview.mp4",
+    "npz": "/app/depthmaps_videos/IWD480_V2-0123_ICD_depth.npz"
+  },
+  {
+    "engine": "ICDepth (Baseline Mode)",
+    "config": "5 Steps, CFG 5.0, Credits ON",
+    "time_sec": 214.19,
+    "fps": 0.24,
+    "peak_vram_gb": 6.73,
+    "mp4": "/tmp/stereofaster_depth_x4kr0l9d/depth_preview.mp4",
+    "npz": "/app/depthmaps_videos/IWD480_V2-0123_ICD_depth.npz"
+  }
+]

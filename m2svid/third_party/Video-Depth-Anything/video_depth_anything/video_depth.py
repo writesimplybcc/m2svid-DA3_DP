@@ -17,6 +17,7 @@ import torch.nn as nn
 from torchvision.transforms import Compose
 import cv2
 from tqdm import tqdm
+import time
 import numpy as np
 import gc
 
@@ -24,7 +25,10 @@ from .dinov2 import DINOv2
 from .dpt_temporal import DPTHeadTemporal
 from .util.transform import Resize, NormalizeImage, PrepareForNet
 
-from utils.util import compute_scale_and_shift, get_interpolate_frames
+try:
+    from .util.alignment import compute_scale_and_shift, get_interpolate_frames
+except (ImportError, ModuleNotFoundError):
+    from utils.util import compute_scale_and_shift, get_interpolate_frames
 
 # infer settings, do not change
 INFER_LEN = 32
@@ -67,7 +71,7 @@ class VideoDepthAnything(nn.Module):
         depth = F.relu(depth)
         return depth.squeeze(1).unflatten(0, (B, T)) # return shape [B, T, H, W]
 
-    def infer_video_depth(self, frames, target_fps, input_size=518, device='cuda', fp32=False):
+    def infer_video_depth(self, frames, target_fps, input_size=518, device='cuda', fp32=False, progress=None):
         frame_height, frame_width = frames[0].shape[:2]
         ratio = max(frame_height, frame_width) / min(frame_height, frame_width)
         if ratio > 1.78:  # we recommend to process video with ratio smaller than 16:9 due to memory limitation
@@ -94,9 +98,25 @@ class VideoDepthAnything(nn.Module):
         append_frame_len = (frame_step - (org_video_len % frame_step)) % frame_step + (INFER_LEN - frame_step)
         frame_list = frame_list + [frame_list[-1].copy()] * append_frame_len
 
+        window_indices = list(range(0, org_video_len, frame_step))
+        total_windows = len(window_indices)
+        print(f"[VDA] Evaluating {total_windows} temporal sliding window{'s' if total_windows > 1 else ''} ({INFER_LEN} frames/window, {OVERLAP} overlap)...", flush=True)
+
         depth_list = []
         pre_input = None
-        for frame_id in tqdm(range(0, org_video_len, frame_step)):
+        for w_idx, frame_id in enumerate(window_indices):
+            import sys
+            if getattr(sys.modules.get('__main__', None), 'GLOBAL_CANCEL', False):
+                sys.modules['__main__'].GLOBAL_CANCEL = False
+                raise RuntimeError("Stopped by user.")
+
+            t_win_start = time.time()
+            f_end = min(frame_id + INFER_LEN, org_video_len)
+            print(f"[VDA] ⏳ Window {w_idx+1}/{total_windows}: processing frames {frame_id+1}–{f_end}/{org_video_len}...", flush=True)
+            if progress:
+                try: progress(0.15 + 0.70 * (w_idx / max(total_windows, 1)), desc=f"VDA: Window {w_idx+1}/{total_windows} (frames {frame_id+1}–{f_end})...")
+                except Exception: pass
+
             cur_list = []
             for i in range(INFER_LEN):
                 cur_list.append(torch.from_numpy(transform({'image': frame_list[frame_id+i].astype(np.float32) / 255.0})['image']).unsqueeze(0).unsqueeze(0))
@@ -113,6 +133,15 @@ class VideoDepthAnything(nn.Module):
             depth_list += [depth[i][0].cpu().numpy() for i in range(depth.shape[0])]
 
             pre_input = cur_input
+            t_win_end = time.time()
+            win_fps = INFER_LEN / max(t_win_end - t_win_start, 1e-4)
+            print(f"[VDA] ✅ Window {w_idx+1}/{total_windows} finished in {t_win_end - t_win_start:.1f}s ({win_fps:.1f} FPS)", flush=True)
+
+        if total_windows > 1:
+            print(f"[VDA] 🔗 Performing keyframe scale & shift alignment across {total_windows} windows...", flush=True)
+            if progress:
+                try: progress(0.88, desc=f"VDA: Aligning {total_windows} temporal windows...")
+                except Exception: pass
 
         del frame_list
         gc.collect()

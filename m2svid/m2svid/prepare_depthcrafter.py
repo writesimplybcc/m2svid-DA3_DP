@@ -4,10 +4,30 @@ import numpy as np
 import torch
 import cv2
 
+# Polyfill torch.accelerator for PyTorch < 2.6
+if not hasattr(torch, "accelerator"):
+    class _TorchAccelerator:
+        @staticmethod
+        def is_available():
+            return torch.cuda.is_available()
+        @staticmethod
+        def device_count():
+            return torch.cuda.device_count()
+        @staticmethod
+        def current_accelerator():
+            return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.accelerator = _TorchAccelerator()
+
+
 # Ensure third_party/DepthCrafter is in sys.path
-DEPTHCRAFTER_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "third_party", "DepthCrafter"))
-if DEPTHCRAFTER_ROOT not in sys.path:
-    sys.path.insert(0, DEPTHCRAFTER_ROOT)
+for candidate_dir in [
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "third_party", "DepthCrafter")),
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "third_party", "DepthCrafter")),
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "m2svid", "third_party", "DepthCrafter")),
+    "/app/m2svid/third_party/DepthCrafter",
+]:
+    if os.path.isdir(candidate_dir) and candidate_dir not in sys.path:
+        sys.path.insert(0, candidate_dir)
 
 _cached_depthcrafter_model = None
 _cached_cpu_offload = None
@@ -93,7 +113,7 @@ def run_depthcrafter_depth(video_path: str, process_res: int, guidance_scale: fl
         w_idx = min(current_window[0], total_windows)
         
         # Print with flush=True so terminal updates immediately
-        print(f"[DepthCrafter] 🪟 Window {w_idx}/{total_windows} | Step {step + 1}/{num_inference_steps}", flush=True)
+        print(f"[DepthCrafter] 🎬 Window {w_idx}/{total_windows} | Step {step + 1}/{num_inference_steps}", flush=True)
         
         if progress:
             try:
@@ -156,3 +176,5 @@ def unload_depthcrafter_model():
             torch.cuda.ipc_collect()
         except Exception:
             pass
+
+

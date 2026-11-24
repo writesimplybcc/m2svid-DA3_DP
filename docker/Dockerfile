@@ -57,23 +57,22 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # =============================================================================
-# Install DA3 with app extras (includes Gradio + addict, etc.)
-# =============================================================================
-COPY Depth-Anything-3 ./Depth-Anything-3
-RUN cd Depth-Anything-3 && pip install -e ".[app]" --no-cache-dir
-
-# Optional: Install gsplat for 3DGS features (can be heavy)
-# RUN pip install --no-build-isolation git+https://github.com/nerfstudio-project/gsplat.git@0b4dddf04cb687367602c01196913cde6a743d70
-
-# =============================================================================
 # Copy the rest of the project
 # =============================================================================
 COPY . .
 
+# Install FlashDepth & ICDepth dependencies and bundled Mamba package (Triton SSM)
+RUN pip install --no-cache-dir hydra-core einops ftfy && \
+    if [ -f "m2svid/third_party/FlashDepth/mamba/setup.py" ]; then \
+        cd m2svid/third_party/FlashDepth/mamba && \
+        MAMBA_SKIP_CUDA_BUILD=TRUE pip install --no-build-isolation --no-deps . && \
+        cd /app; \
+    fi
+
 # =============================================================================
 # Set PYTHONPATH for subprojects
 # =============================================================================
-ENV PYTHONPATH="/app:/app/Depth-Anything-3/src:/app/m2svid/third_party/Hi3D-Official:/app/m2svid/third_party/pytorch-msssim:${PYTHONPATH}"
+ENV PYTHONPATH="/app:/app/m2svid/third_party/ICDepth:/app/m2svid/third_party/FlashDepth:/app/m2svid/third_party/FlashDepth/mamba:/app/m2svid/third_party/Video-Depth-Anything:/app/m2svid/third_party/Hi3D-Official:/app/m2svid/third_party/pytorch-msssim"
 
 # =============================================================================
 # Prepare directories

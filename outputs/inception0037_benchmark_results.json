@@ -1,0 +1,65 @@
+[
+  {
+    "engine": "Video Depth Anything",
+    "config": "ViT-Base (vitb)",
+    "time_sec": 27.13,
+    "fps": 2.25,
+    "peak_vram_gb": 4.0,
+    "mp4": "/app/depthmaps_videos/Inception - Final Trailer_V2-0037_cropped_VDAB_depth.mp4",
+    "npz": "/app/depthmaps_videos/Inception - Final Trailer_V2-0037_cropped_VDAB_depth.npz"
+  },
+  {
+    "engine": "FlashDepth",
+    "config": "2K VFX Hybrid",
+    "time_sec": 53.88,
+    "fps": 1.13,
+    "peak_vram_gb": 2.19,
+    "mp4": "/app/depthmaps_videos/Inception - Final Trailer_V2-0037_cropped_FDF_depth.mp4",
+    "npz": "/app/depthmaps_videos/Inception - Final Trailer_V2-0037_cropped_FDF_depth.npz"
+  },
+  {
+    "engine": "Video Depth Anything",
+    "config": "ViT-Large (vitl)",
+    "time_sec": 105.65,
+    "fps": 0.58,
+    "peak_vram_gb": 9.38,
+    "mp4": "/app/depthmaps_videos/Inception - Final Trailer_V2-0037_cropped_VDAL_depth.mp4",
+    "npz": "/app/depthmaps_videos/Inception - Final Trailer_V2-0037_cropped_VDAL_depth.npz"
+  },
+  {
+    "engine": "FlashDepth",
+    "config": "ViT-Large Standalone",
+    "time_sec": 170.32,
+    "fps": 0.36,
+    "peak_vram_gb": 2.3,
+    "mp4": "/app/depthmaps_videos/Inception - Final Trailer_V2-0037_cropped_FDL_depth.mp4",
+    "npz": "/app/depthmaps_videos/Inception - Final Trailer_V2-0037_cropped_FDL_depth.npz"
+  },
+  {
+    "engine": "DepthCrafter",
+    "config": "Diffusion 5-Step, Win 30",
+    "time_sec": 112.77,
+    "fps": 0.54,
+    "peak_vram_gb": 4.77,
+    "mp4": "/app/depthmaps_videos/Inception - Final Trailer_V2-0037_cropped_DC_depth.mp4",
+    "npz": "/app/depthmaps_videos/Inception - Final Trailer_V2-0037_cropped_DC_depth.npz"
+  },
+  {
+    "engine": "ICDepth (Fast Mode)",
+    "config": "3 Steps, CFG 1.0, Credits ON",
+    "time_sec": 230.47,
+    "fps": 0.26,
+    "peak_vram_gb": 6.73,
+    "mp4": "/tmp/stereofaster_depth_1q0ksly0/depth_preview.mp4",
+    "npz": "/app/depthmaps_videos/Inception - Final Trailer_V2-0037_cropped_ICD_depth.npz"
+  },
+  {
+    "engine": "ICDepth (Baseline Mode)",
+    "config": "5 Steps, CFG 5.0, Credits ON",
+    "time_sec": 177.86,
+    "fps": 0.34,
+    "peak_vram_gb": 6.73,
+    "mp4": "/tmp/stereofaster_depth_o1x2ooem/depth_preview.mp4",
+    "npz": "/app/depthmaps_videos/Inception - Final Trailer_V2-0037_cropped_ICD_depth.npz"
+  }
+]

@@ -22,7 +22,10 @@ from .dinov2 import DINOv2
 from .dpt_temporal import DPTHeadTemporal
 from .util.transform import Resize, NormalizeImage, PrepareForNet
 
-from utils.util import compute_scale_and_shift, get_interpolate_frames
+try:
+    from .util.alignment import compute_scale_and_shift, get_interpolate_frames
+except (ImportError, ModuleNotFoundError):
+    from utils.util import compute_scale_and_shift, get_interpolate_frames
 
 # infer settings, do not change
 INFER_LEN = 32

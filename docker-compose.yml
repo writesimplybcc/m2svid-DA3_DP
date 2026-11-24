@@ -1,0 +1,50 @@
+name: stereofaster
+
+services:
+  stereofaster:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: stereofaster:latest
+    container_name: stereofaster
+
+    # GPU support (requires NVIDIA Container Toolkit)
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    ports:
+      - "7860:7860"
+
+    volumes:
+      # Live code mounts (allows edits to take effect without rebuilding)
+      - ./webui.py:/app/webui.py
+      - ./pipeline_sidecar.py:/app/pipeline_sidecar.py
+      - ./pipeline_sidecar.json:/app/pipeline_sidecar.json
+      - ./m2svid:/app/m2svid
+
+      # Mount local video directories
+      - ./source_videos:/app/source_videos
+      - ./depthmaps_videos:/app/depthmaps_videos
+      - ./final_videos:/app/final_videos
+      - ./data:/app/data
+      - ./outputs:/app/outputs
+
+      # Mount M2SVid weights (~4-8GB)
+      - ./m2svid/ckpts:/app/m2svid/ckpts
+
+      # Mount Hugging Face cache so models are not re-downloaded
+      - ~/.cache/huggingface:/root/.cache/huggingface
+
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - HF_HUB_ENABLE_HF_TRANSFER=1
+      - PYTHONPATH=/app:/app/m2svid/third_party/ICDepth:/app/m2svid/third_party/FlashDepth:/app/m2svid/third_party/Video-Depth-Anything:/app/m2svid/third_party/Hi3D-Official:/app/m2svid/third_party/pytorch-msssim
+
+    shm_size: '16gb'
+    restart: unless-stopped

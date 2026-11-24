@@ -105,6 +105,44 @@ class DepthCrafterPipeline(StableVideoDiffusionPipeline):
         video_latents = torch.cat(video_latents, dim=0).cpu()
         return video_latents
 
+    @torch.inference_mode()
+    def decode_latents(
+        self,
+        latents: torch.Tensor,
+        num_frames: int,
+        decode_chunk_size: int = 4,
+    ) -> torch.Tensor:
+        """Decode VAE latents with CPU chunk streaming to prevent multi-gigabyte VRAM spikes on long videos."""
+        latents = latents.flatten(0, 1)
+        latents = 1 / self.vae.config.scaling_factor * latents
+
+        import inspect
+        forward_vae_fn = self.vae._orig_mod.forward if hasattr(self.vae, "_orig_mod") else self.vae.forward
+        accepts_num_frames = "num_frames" in set(inspect.signature(forward_vae_fn).parameters.keys())
+
+        # Decode decode_chunk_size frames at a time, streaming directly to CPU to avoid OOM
+        device = self._execution_device
+        frames = []
+        for i in range(0, latents.shape[0], decode_chunk_size):
+            chunk = latents[i : i + decode_chunk_size].to(device=device, dtype=self.vae.dtype)
+            num_frames_in = chunk.shape[0]
+            decode_kwargs = {}
+            if accepts_num_frames:
+                decode_kwargs["num_frames"] = num_frames_in
+
+            frame = self.vae.decode(chunk, **decode_kwargs).sample
+            # Move immediately to CPU memory to avoid multi-gigabyte GPU VRAM allocations
+            frames.append(frame.cpu())
+            del chunk, frame
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        frames = torch.cat(frames, dim=0)
+        # [batch*frames, channels, height, width] -> [batch, channels, frames, height, width]
+        frames = frames.reshape(-1, num_frames, *frames.shape[1:]).permute(0, 2, 1, 3, 4)
+        frames = frames.float()
+        return frames
+
     @staticmethod
     def check_inputs(video: Union[torch.Tensor, np.ndarray], height: int, width: int):
         """
