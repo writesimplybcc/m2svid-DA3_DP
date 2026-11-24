@@ -4942,6 +4942,24 @@ STEREOFASTER_HEAD_HTML = """
         return null;
     }
 
+    function sfClickBtn(btn) {
+        if (!btn) return;
+        try {
+            if (typeof btn.__click === 'function') {
+                btn.__click(new MouseEvent('click', { bubbles: true, cancelable: true }));
+            }
+        } catch(e) {}
+        try {
+            btn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+            btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+            btn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
+            btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+            btn.click();
+        } catch(e) {
+            btn.click();
+        }
+    }
+
     function detectToolFromCanvas() {
         const editor = document.querySelector('#depth_paint_canvas');
         if (!editor) return null;
@@ -4952,10 +4970,15 @@ STEREOFASTER_HEAD_HTML = """
         if (eraserSizeBtn && !brushSizeBtn) return 'erase';
         if (brushSizeBtn && !eraserSizeBtn) return 'draw';
 
-        // 2. Check highlighted tool buttons ('Brush' vs 'Erase')
+        // 2. Check highlighted tool buttons ('Brush' vs 'Erase' vs 'Pan')
+        const panBtn = editor.querySelector('button[aria-label="Pan"], button[title="Pan"]');
         const eraseBtn = editor.querySelector('button[aria-label="Erase"], button[title="Erase"]');
         const brushBtn = editor.querySelector('button[aria-label="Brush"], button[title="Brush"]');
 
+        const isPanHighlighted = panBtn && (
+            panBtn.classList.contains('highlight') ||
+            (panBtn.className && typeof panBtn.className === 'string' && panBtn.className.includes('highlight'))
+        );
         const isEraseHighlighted = eraseBtn && (
             eraseBtn.classList.contains('highlight') ||
             (eraseBtn.className && typeof eraseBtn.className === 'string' && eraseBtn.className.includes('highlight'))
@@ -4965,6 +4988,7 @@ STEREOFASTER_HEAD_HTML = """
             (brushBtn.className && typeof brushBtn.className === 'string' && brushBtn.className.includes('highlight'))
         );
 
+        if (isPanHighlighted) return 'pan';
         if (isEraseHighlighted && !isBrushHighlighted) return 'erase';
         if (isBrushHighlighted && !isEraseHighlighted) return 'draw';
 
@@ -4976,6 +5000,10 @@ STEREOFASTER_HEAD_HTML = """
     }
 
     function getCurrentToolMode() {
+        if (window.sfCurrentTool === 'pan') return 'pan';
+        if (window.sfLastToolSetTime && (Date.now() - window.sfLastToolSetTime < 600)) {
+            return window.sfCurrentTool || 'draw';
+        }
         const detected = detectToolFromCanvas();
         if (detected) {
             window.sfCurrentTool = detected;
@@ -4993,30 +5021,58 @@ STEREOFASTER_HEAD_HTML = """
         const mode = getCurrentToolMode();
         window.sfCurrentTool = mode;
         const isEraser = (mode === 'erase');
+        const isPan = (mode === 'pan');
         const size = isEraser ? (window.sfEraserSize || 4) : (window.sfBrushSize || 4);
 
         const modeLabel = document.getElementById('sf-mode-label');
         if (modeLabel) {
-            modeLabel.innerText = isEraser ? '🧹 Eraser Size:' : '🖌️ Brush Size:';
-            modeLabel.style.color = isEraser ? '#f59e0b' : '#38bdf8';
+            if (isPan) {
+                modeLabel.innerText = '✋ Pan Mode:';
+                modeLabel.style.color = '#10b981';
+            } else if (isEraser) {
+                modeLabel.innerText = '🧹 Eraser Size:';
+                modeLabel.style.color = '#f59e0b';
+            } else {
+                modeLabel.innerText = '🖌️ Brush Size:';
+                modeLabel.style.color = '#38bdf8';
+            }
         }
 
         const valDisplay = document.getElementById('sf-brush-val');
         if (valDisplay) {
             valDisplay.innerText = size + ' px';
-            valDisplay.style.color = isEraser ? '#f59e0b' : '#38bdf8';
+            valDisplay.style.color = isEraser ? '#f59e0b' : (isPan ? '#10b981' : '#38bdf8');
         }
 
         const toolBrushBtn = document.getElementById('sf-tool-brush-btn');
         const toolEraserBtn = document.getElementById('sf-tool-eraser-btn');
+        const toolPanBtn = document.getElementById('sf-tool-pan-btn');
+
         if (toolBrushBtn && toolEraserBtn) {
-            if (isEraser) {
+            if (isPan) {
+                if (toolPanBtn) {
+                    toolPanBtn.style.background = '#10b981';
+                    toolPanBtn.style.color = '#ffffff';
+                    toolPanBtn.style.fontWeight = 'bold';
+                }
+                toolBrushBtn.style.background = 'transparent';
+                toolBrushBtn.style.color = '#94a3b8';
+                toolBrushBtn.style.fontWeight = 'normal';
+                toolEraserBtn.style.background = 'transparent';
+                toolEraserBtn.style.color = '#94a3b8';
+                toolEraserBtn.style.fontWeight = 'normal';
+            } else if (isEraser) {
                 toolEraserBtn.style.background = '#d97706';
                 toolEraserBtn.style.color = '#ffffff';
                 toolEraserBtn.style.fontWeight = 'bold';
                 toolBrushBtn.style.background = 'transparent';
                 toolBrushBtn.style.color = '#94a3b8';
                 toolBrushBtn.style.fontWeight = 'normal';
+                if (toolPanBtn) {
+                    toolPanBtn.style.background = 'transparent';
+                    toolPanBtn.style.color = '#94a3b8';
+                    toolPanBtn.style.fontWeight = 'normal';
+                }
             } else {
                 toolBrushBtn.style.background = '#0284c7';
                 toolBrushBtn.style.color = '#ffffff';
@@ -5024,6 +5080,11 @@ STEREOFASTER_HEAD_HTML = """
                 toolEraserBtn.style.background = 'transparent';
                 toolEraserBtn.style.color = '#94a3b8';
                 toolEraserBtn.style.fontWeight = 'normal';
+                if (toolPanBtn) {
+                    toolPanBtn.style.background = 'transparent';
+                    toolPanBtn.style.color = '#94a3b8';
+                    toolPanBtn.style.fontWeight = 'normal';
+                }
             }
         }
 
@@ -5058,33 +5119,97 @@ STEREOFASTER_HEAD_HTML = """
 
     window.sfSetTool = function(tool) {
         window.sfCurrentTool = tool;
+        window.sfLastToolSetTime = Date.now();
         const editor = document.querySelector('#depth_paint_canvas');
         if (editor) {
-            const ariaTarget = (tool === 'erase') ? 'Erase' : 'Brush';
-            let btn = editor.querySelector('button[aria-label="' + ariaTarget + '"], button[title="' + ariaTarget + '"]');
+            let btn = null;
+            if (tool === 'erase') {
+                btn = editor.querySelector('button[aria-label="Erase"], button[title="Erase"], button[aria-label="Eraser"], button[title="Eraser"]');
+            } else if (tool === 'pan') {
+                btn = editor.querySelector('button[aria-label="Pan"], button[title="Pan"]');
+            } else {
+                btn = editor.querySelector('button[aria-label="Brush"], button[title="Brush"], button[aria-label="Draw"], button[title="Draw"]');
+            }
+
             if (!btn) {
                 const buttons = editor.querySelectorAll('button');
                 for (let i = 0; i < buttons.length; i++) {
                     const b = buttons[i];
                     const aria = (b.getAttribute('aria-label') || '').toLowerCase();
                     const title = (b.getAttribute('title') || '').toLowerCase();
-                    if (tool === 'erase' && (aria === 'erase' || title === 'erase')) {
+                    if (aria.includes('size') || title.includes('size')) continue;
+
+                    if (tool === 'erase' && (aria.includes('erase') || title.includes('erase'))) {
                         btn = b;
                         break;
-                    } else if (tool === 'draw' && (aria === 'brush' || title === 'brush')) {
+                    } else if (tool === 'pan' && (aria.includes('pan') || title.includes('pan'))) {
+                        btn = b;
+                        break;
+                    } else if (tool === 'draw' && (aria.includes('brush') || title.includes('brush') || aria.includes('draw') || title.includes('draw'))) {
                         btn = b;
                         break;
                     }
                 }
             }
-            if (btn) btn.click();
+            if (btn) sfClickBtn(btn);
         }
+
         if (window.editor && typeof window.editor.set_tool === 'function') {
-            window.editor.set_tool(tool);
+            try { window.editor.set_tool(tool); } catch(e) {}
         }
+
+        const brush = getBrushTool();
+        if (brush) {
+            if (tool === 'draw' || tool === 'erase') {
+                if (typeof brush.set_tool === 'function') brush.set_tool(tool);
+                if (brush.state) brush.state.mode = tool;
+                if (typeof brush.set_mode === 'function') brush.set_mode(tool);
+            }
+        }
+
+        syncToolState();
         setTimeout(syncToolState, 40);
         setTimeout(syncToolState, 120);
-        showToast(tool === 'erase' ? '🧹 Switched to Eraser' : '🖌️ Switched to Brush');
+
+        if (tool === 'erase') {
+            showToast('🧹 Switched to Eraser (E)');
+        } else if (tool === 'pan') {
+            showToast('✋ Pan Mode: Drag canvas to move (P / Space to exit)');
+        } else {
+            showToast('🖌️ Switched to Brush (B)');
+        }
+    };
+
+    window.sfZoom = function(delta) {
+        const editor = document.querySelector('#depth_paint_canvas');
+        if (editor) {
+            let btn = null;
+            if (delta === 1) {
+                btn = editor.querySelector('button[aria-label*="Zoom in" i], button[title*="Zoom in" i]');
+            } else if (delta === -1) {
+                btn = editor.querySelector('button[aria-label*="Zoom out" i], button[title*="Zoom out" i]');
+            } else if (delta === 'fit') {
+                btn = editor.querySelector('button[aria-label*="Reset zoom" i], button[title*="Reset zoom" i], button[aria-label*="fit" i]');
+            }
+            if (btn) sfClickBtn(btn);
+        }
+
+        const zoomTool = window.editor && window.editor.tools ? window.editor.tools.get('zoom') : null;
+        if (zoomTool && typeof zoomTool.set_zoom === 'function') {
+            if (delta === 'fit') {
+                zoomTool.set_zoom('fit');
+                showToast('🔍 Zoom: Fit');
+            } else {
+                const cur = zoomTool.local_scale || 1.0;
+                const factor = delta > 0 ? 1.25 : 0.80;
+                const next = Math.max(0.1, Math.min(10.0, Math.round(cur * factor * 100) / 100));
+                zoomTool.set_zoom(next);
+                showToast('🔍 Zoom: ' + Math.round(next * 100) + '%');
+            }
+        } else {
+            if (delta === 'fit') showToast('🔍 Zoom: Fit (0)');
+            else showToast(delta > 0 ? '🔍 Zoom In (+)' : '🔍 Zoom Out (-)');
+        }
     };
 
     function updateOpacityUI(opacity) {
@@ -5240,8 +5365,16 @@ STEREOFASTER_HEAD_HTML = """
         }
     }
 
+    document.addEventListener('mouseover', function(e) {
+        window.sfMouseOverCanvas = !!(e.target && e.target.closest && e.target.closest('#depth_paint_canvas, .toolbar-wrap'));
+    }, true);
+
     document.addEventListener('pointerdown', function(e) {
         if (e.target && e.target.closest && e.target.closest('#depth_paint_canvas')) {
+            // Unfocus any text input so canvas key shortcuts work immediately
+            if (document.activeElement && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName) && document.activeElement.type !== 'range') {
+                document.activeElement.blur();
+            }
             ensureBrushSettings();
         }
     }, true);
@@ -5254,15 +5387,23 @@ STEREOFASTER_HEAD_HTML = """
 
             if (aria === 'erase' || title === 'erase' || aria === 'eraser' || title === 'eraser') {
                 window.sfCurrentTool = 'erase';
+                window.sfLastToolSetTime = Date.now();
                 syncToolState();
             } else if (aria === 'brush' || title === 'brush' || aria === 'draw' || title === 'draw') {
                 window.sfCurrentTool = 'draw';
+                window.sfLastToolSetTime = Date.now();
+                syncToolState();
+            } else if (aria === 'pan' || title === 'pan') {
+                window.sfCurrentTool = 'pan';
+                window.sfLastToolSetTime = Date.now();
                 syncToolState();
             } else if (aria.includes('eraser size') || title.includes('eraser size')) {
                 window.sfCurrentTool = 'erase';
+                window.sfLastToolSetTime = Date.now();
                 syncToolState();
             } else if (aria.includes('brush size') || title.includes('brush size')) {
                 window.sfCurrentTool = 'draw';
+                window.sfLastToolSetTime = Date.now();
                 syncToolState();
             }
 
@@ -5271,13 +5412,48 @@ STEREOFASTER_HEAD_HTML = """
         }
     }, true);
 
-    // Hotkeys: [ and ] for size, { and } (Shift+[ / Shift+]) for opacity, B for Brush, E for Eraser
+    // Hotkeys:
+    // B = Brush, E = Eraser, P / H = Pan, Space (hold) = Temporary Pan
+    // [ and ] = size, { and } = opacity
+    // - / _ = Zoom out, + / = = Zoom in, 0 = Fit Zoom
     document.addEventListener('keydown', function(e) {
         const active = document.activeElement;
-        if (active && ['INPUT', 'TEXTAREA'].includes(active.tagName) && active.type !== 'range') return;
-        if (active && active.isContentEditable) return;
+        const isInput = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable) &&
+                        ['text', 'password', 'number', 'search', 'email', 'url'].includes((active.type || '').toLowerCase());
 
-        if (e.key === '{' || (e.shiftKey && e.key === '[')) {
+        if (isInput) {
+            if (window.sfMouseOverCanvas) {
+                active.blur();
+            } else {
+                return;
+            }
+        }
+
+        // Avoid triggering when user holds Ctrl, Alt, or Meta (except zoom combinations)
+        if (e.ctrlKey || e.altKey || e.metaKey) {
+            if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+' || e.code === 'Equal' || e.code === 'NumpadAdd')) {
+                e.preventDefault();
+                window.sfZoom(1);
+            } else if ((e.ctrlKey || e.metaKey) && (e.key === '-' || e.key === '_' || e.code === 'Minus' || e.code === 'NumpadSubtract')) {
+                e.preventDefault();
+                window.sfZoom(-1);
+            } else if ((e.ctrlKey || e.metaKey) && (e.key === '0' || e.code === 'Digit0' || e.code === 'Numpad0')) {
+                e.preventDefault();
+                window.sfZoom('fit');
+            }
+            return;
+        }
+
+        if (e.key === ' ' || e.code === 'Space') {
+            // Spacebar: Hold to pan
+            if (!e.repeat && window.sfCurrentTool !== 'pan') {
+                e.preventDefault();
+                window.sfPreSpaceTool = window.sfCurrentTool || 'draw';
+                window.sfSetTool('pan');
+            } else if (e.repeat) {
+                e.preventDefault();
+            }
+        } else if (e.key === '{' || (e.shiftKey && e.key === '[')) {
             e.preventDefault();
             window.sfAdjustBrushOpacity(-0.10);
         } else if (e.key === '}' || (e.shiftKey && e.key === ']')) {
@@ -5289,10 +5465,38 @@ STEREOFASTER_HEAD_HTML = """
         } else if (e.key === ']') {
             e.preventDefault();
             window.sfAdjustSize(1);
-        } else if (e.key === 'b' || e.key === 'B') {
+        } else if (e.key === 'b' || e.key === 'B' || e.code === 'KeyB') {
+            e.preventDefault();
             window.sfSetTool('draw');
-        } else if (e.key === 'e' || e.key === 'E') {
+        } else if (e.key === 'e' || e.key === 'E' || e.code === 'KeyE') {
+            e.preventDefault();
             window.sfSetTool('erase');
+        } else if (e.key === 'p' || e.key === 'P' || e.code === 'KeyP' || e.key === 'h' || e.key === 'H' || e.code === 'KeyH') {
+            e.preventDefault();
+            if (window.sfCurrentTool === 'pan') {
+                window.sfSetTool('draw');
+            } else {
+                window.sfSetTool('pan');
+            }
+        } else if (e.key === '-' || e.key === '_' || e.code === 'Minus' || e.code === 'NumpadSubtract') {
+            e.preventDefault();
+            window.sfZoom(-1);
+        } else if (e.key === '=' || e.key === '+' || e.code === 'Equal' || e.code === 'NumpadAdd') {
+            e.preventDefault();
+            window.sfZoom(1);
+        } else if (e.key === '0' || e.code === 'Digit0' || e.code === 'Numpad0') {
+            e.preventDefault();
+            window.sfZoom('fit');
+        }
+    });
+
+    document.addEventListener('keyup', function(e) {
+        if (e.key === ' ' || e.code === 'Space') {
+            if (window.sfPreSpaceTool) {
+                e.preventDefault();
+                window.sfSetTool(window.sfPreSpaceTool);
+                window.sfPreSpaceTool = null;
+            }
         }
     });
 
@@ -5982,8 +6186,9 @@ def create_stereofaster_ui():
                                         <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
                                             <!-- Tool Switcher Buttons -->
                                             <div style="display: inline-flex; border-radius: 6px; background: #0f172a; padding: 2px; border: 1px solid #475569; margin-right: 6px;">
-                                                <button type="button" id="sf-tool-brush-btn" onclick="window.sfSetTool && window.sfSetTool('draw')" style="padding: 3px 9px; border-radius: 4px; border: none; background: #0284c7; color: #ffffff; font-weight: bold; cursor: pointer; font-size: 0.85em;">🖌️ Brush</button>
-                                                <button type="button" id="sf-tool-eraser-btn" onclick="window.sfSetTool && window.sfSetTool('erase')" style="padding: 3px 9px; border-radius: 4px; border: none; background: transparent; color: #94a3b8; cursor: pointer; font-size: 0.85em;">🧹 Eraser</button>
+                                                <button type="button" id="sf-tool-brush-btn" onclick="window.sfSetTool && window.sfSetTool('draw')" style="padding: 3px 9px; border-radius: 4px; border: none; background: #0284c7; color: #ffffff; font-weight: bold; cursor: pointer; font-size: 0.85em;" title="Brush (Hotkey: B)">🖌️ Brush</button>
+                                                <button type="button" id="sf-tool-eraser-btn" onclick="window.sfSetTool && window.sfSetTool('erase')" style="padding: 3px 9px; border-radius: 4px; border: none; background: transparent; color: #94a3b8; cursor: pointer; font-size: 0.85em;" title="Eraser (Hotkey: E)">🧹 Eraser</button>
+                                                <button type="button" id="sf-tool-pan-btn" onclick="window.sfSetTool && window.sfSetTool('pan')" style="padding: 3px 9px; border-radius: 4px; border: none; background: transparent; color: #94a3b8; cursor: pointer; font-size: 0.85em;" title="Pan canvas (Hotkey: P or Hold Spacebar to drag)">✋ Pan</button>
                                             </div>
                                             <span id="sf-mode-label" style="font-weight: 600; color: #38bdf8; font-size: 0.9em; min-width: 95px;">🖌️ Brush Size:</span>
                                             <button type="button" class="sf-brush-btn" data-size="1" onclick="window.sfSetSize && window.sfSetSize(1)" style="padding: 3px 8px; border-radius: 4px; border: 1px solid #475569; background: #0f172a; color: #f1f5f9; cursor: pointer; font-size: 0.85em;">1px</button>
@@ -5998,7 +6203,13 @@ def create_stereofaster_ui():
                                             <button type="button" onclick="window.sfAdjustSize && window.sfAdjustSize(-1)" style="padding: 3px 9px; border-radius: 4px; border: 1px solid #475569; background: #1e293b; color: #f1f5f9; cursor: pointer; font-size: 0.9em; font-weight: bold;" title="Decrease size by 1px (or press [)">- 1px</button>
                                             <span id="sf-brush-val" style="font-weight: 700; color: #38bdf8; min-width: 48px; text-align: center; font-size: 0.95em;">4 px</span>
                                             <button type="button" onclick="window.sfAdjustSize && window.sfAdjustSize(1)" style="padding: 3px 9px; border-radius: 4px; border: 1px solid #475569; background: #1e293b; color: #f1f5f9; cursor: pointer; font-size: 0.9em; font-weight: bold;" title="Increase size by 1px (or press ])">+ 1px</button>
-                                            <span style="color: #94a3b8; font-size: 0.8em; margin-left: 6px;">(Hotkeys: <b>[</b> and <b>]</b>)</span>
+                                            <span style="color: #94a3b8; font-size: 0.8em; margin-left: 2px;">(<b>[</b> / <b>]</b>)</span>
+                                            <!-- Zoom Controls -->
+                                            <div style="display: inline-flex; border-radius: 6px; background: #0f172a; padding: 2px; border: 1px solid #475569; margin-left: 6px;">
+                                                <button type="button" onclick="window.sfZoom && window.sfZoom(-1)" style="padding: 2px 7px; border-radius: 3px; border: none; background: transparent; color: #cbd5e1; cursor: pointer; font-size: 0.85em; font-weight: bold;" title="Zoom Out (Hotkey: -)">🔍 -</button>
+                                                <button type="button" onclick="window.sfZoom && window.sfZoom(1)" style="padding: 2px 7px; border-radius: 3px; border: none; background: transparent; color: #cbd5e1; cursor: pointer; font-size: 0.85em; font-weight: bold;" title="Zoom In (Hotkey: +)">🔍 +</button>
+                                                <button type="button" onclick="window.sfZoom && window.sfZoom('fit')" style="padding: 2px 7px; border-radius: 3px; border: none; background: transparent; color: #cbd5e1; cursor: pointer; font-size: 0.8em;" title="Fit Zoom to Screen (Hotkey: 0)">Fit</button>
+                                            </div>
                                         </div>
                                     </div>
                                     <!-- Brush Opacity (Translucency) Row -->
@@ -6015,7 +6226,7 @@ def create_stereofaster_ui():
                                             <button type="button" onclick="window.sfAdjustBrushOpacity && window.sfAdjustBrushOpacity(-0.10)" style="padding: 3px 9px; border-radius: 4px; border: 1px solid #475569; background: #1e293b; color: #f1f5f9; cursor: pointer; font-size: 0.9em; font-weight: bold;" title="Decrease opacity by 10% (or press { / Shift+[)">- 10%</button>
                                             <span id="sf-brush-opacity-val" style="font-weight: 700; color: #a78bfa; min-width: 48px; text-align: center; font-size: 0.95em;">50%</span>
                                             <button type="button" onclick="window.sfAdjustBrushOpacity && window.sfAdjustBrushOpacity(0.10)" style="padding: 3px 9px; border-radius: 4px; border: 1px solid #475569; background: #1e293b; color: #f1f5f9; cursor: pointer; font-size: 0.9em; font-weight: bold;" title="Increase opacity by 10% (or press } / Shift+])">+ 10%</button>
-                                            <span style="color: #94a3b8; font-size: 0.8em; margin-left: 6px;">(Hotkeys: <b>{</b> and <b>}</b> or <b>Shift+[</b> / <b>]</b>)</span>
+                                            <span style="color: #94a3b8; font-size: 0.8em; margin-left: 6px;">(Hotkeys: <b>B</b> Brush | <b>E</b> Eraser | <b>P/Space</b> Pan | <b>- / +</b> Zoom | <b>0</b> Fit | <b>[ / ]</b> Size)</span>
                                         </div>
                                     </div>
                                 </div>
