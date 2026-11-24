@@ -39,11 +39,19 @@ RUN pip install --no-cache-dir hydra-core einops ftfy && \
 # Set PYTHONPATH for all subprojects (ICDepth, FlashDepth, VDA, Hi3D, M2SVid)
 ENV PYTHONPATH="/workspace/m2svid-DA3_DP:/workspace/m2svid-DA3_DP/m2svid/third_party/ICDepth:/workspace/m2svid-DA3_DP/m2svid/third_party/FlashDepth:/workspace/m2svid-DA3_DP/m2svid/third_party/FlashDepth/mamba:/workspace/m2svid-DA3_DP/m2svid/third_party/Video-Depth-Anything:/workspace/m2svid-DA3_DP/m2svid/third_party/Hi3D-Official:/workspace/m2svid-DA3_DP/m2svid/third_party/pytorch-msssim"
 
-# Create necessary I/O folders and keep a backup image snapshot in /opt/stereofaster_app
-# so RunPod's runtime /workspace volume mount never hides the application code
+# Create necessary I/O folders and keep a lightweight code snapshot in /opt/stereofaster_app
+# (excluding giant weight files so child image remains fast and lightweight, ~150MB instead of 10GB)
 RUN mkdir -p source_videos depthmaps_videos final_videos scratch ckpts checkpoints && \
     mkdir -p /opt/stereofaster_app && \
-    cp -a /workspace/m2svid-DA3_DP/. /opt/stereofaster_app/
+    rsync -a \
+      --exclude='*.pt' \
+      --exclude='*.pth' \
+      --exclude='*.bin' \
+      --exclude='*.safetensors' \
+      --exclude='*.ckpt' \
+      --exclude='ckpts/' \
+      --exclude='checkpoints/' \
+      /workspace/m2svid-DA3_DP/ /opt/stereofaster_app/
 
 # Install FileBrowser
 RUN curl -fsSL https://raw.githubusercontent.com/filebrowser/get/master/get.sh | bash
