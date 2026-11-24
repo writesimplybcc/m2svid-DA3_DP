@@ -4942,15 +4942,51 @@ STEREOFASTER_HEAD_HTML = """
         return null;
     }
 
+    function detectToolFromCanvas() {
+        const editor = document.querySelector('#depth_paint_canvas');
+        if (!editor) return null;
+
+        // 1. Check direct tool-specific size button conditionally mounted by Gradio:
+        const eraserSizeBtn = editor.querySelector('button[aria-label="Eraser Size"], button[title="Eraser Size"]');
+        const brushSizeBtn = editor.querySelector('button[aria-label="Brush Size"], button[title="Brush Size"]');
+        if (eraserSizeBtn && !brushSizeBtn) return 'erase';
+        if (brushSizeBtn && !eraserSizeBtn) return 'draw';
+
+        // 2. Check highlighted tool buttons ('Brush' vs 'Erase')
+        const eraseBtn = editor.querySelector('button[aria-label="Erase"], button[title="Erase"]');
+        const brushBtn = editor.querySelector('button[aria-label="Brush"], button[title="Brush"]');
+
+        const isEraseHighlighted = eraseBtn && (
+            eraseBtn.classList.contains('highlight') ||
+            (eraseBtn.className && typeof eraseBtn.className === 'string' && eraseBtn.className.includes('highlight'))
+        );
+        const isBrushHighlighted = brushBtn && (
+            brushBtn.classList.contains('highlight') ||
+            (brushBtn.className && typeof brushBtn.className === 'string' && brushBtn.className.includes('highlight'))
+        );
+
+        if (isEraseHighlighted && !isBrushHighlighted) return 'erase';
+        if (isBrushHighlighted && !isEraseHighlighted) return 'draw';
+
+        // 3. Check open popovers
+        if (document.querySelector('#depth_paint_canvas .eraser_picker, .eraser_picker')) return 'erase';
+        if (document.querySelector('#depth_paint_canvas .size_picker, .size_picker')) return 'draw';
+
+        return null;
+    }
+
     function getCurrentToolMode() {
-        if (window.sfCurrentTool === 'erase') return 'erase';
+        const detected = detectToolFromCanvas();
+        if (detected) {
+            window.sfCurrentTool = detected;
+            return detected;
+        }
         const brush = getBrushTool();
         if (brush && brush.state && brush.state.mode) {
+            window.sfCurrentTool = brush.state.mode;
             return brush.state.mode;
         }
-        const eraserBtn = document.querySelector('#depth_paint_canvas button[aria-label="Eraser Size"]');
-        if (eraserBtn) return 'erase';
-        return 'draw';
+        return window.sfCurrentTool || 'draw';
     }
 
     function syncToolState() {
@@ -5025,13 +5061,29 @@ STEREOFASTER_HEAD_HTML = """
         const editor = document.querySelector('#depth_paint_canvas');
         if (editor) {
             const ariaTarget = (tool === 'erase') ? 'Erase' : 'Brush';
-            const btn = editor.querySelector('button[aria-label="' + ariaTarget + '"]');
+            let btn = editor.querySelector('button[aria-label="' + ariaTarget + '"], button[title="' + ariaTarget + '"]');
+            if (!btn) {
+                const buttons = editor.querySelectorAll('button');
+                for (let i = 0; i < buttons.length; i++) {
+                    const b = buttons[i];
+                    const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                    const title = (b.getAttribute('title') || '').toLowerCase();
+                    if (tool === 'erase' && (aria === 'erase' || title === 'erase')) {
+                        btn = b;
+                        break;
+                    } else if (tool === 'draw' && (aria === 'brush' || title === 'brush')) {
+                        btn = b;
+                        break;
+                    }
+                }
+            }
             if (btn) btn.click();
         }
         if (window.editor && typeof window.editor.set_tool === 'function') {
             window.editor.set_tool(tool);
         }
         setTimeout(syncToolState, 40);
+        setTimeout(syncToolState, 120);
         showToast(tool === 'erase' ? '🧹 Switched to Eraser' : '🖌️ Switched to Brush');
     };
 
@@ -5195,12 +5247,31 @@ STEREOFASTER_HEAD_HTML = """
     }, true);
 
     document.addEventListener('click', function(e) {
-        if (e.target && e.target.closest && e.target.closest('#depth_paint_canvas button')) {
-            setTimeout(syncToolState, 50);
+        const btn = e.target && e.target.closest && e.target.closest('#depth_paint_canvas button');
+        if (btn) {
+            const aria = (btn.getAttribute('aria-label') || '').trim().toLowerCase();
+            const title = (btn.getAttribute('title') || '').trim().toLowerCase();
+
+            if (aria === 'erase' || title === 'erase' || aria === 'eraser' || title === 'eraser') {
+                window.sfCurrentTool = 'erase';
+                syncToolState();
+            } else if (aria === 'brush' || title === 'brush' || aria === 'draw' || title === 'draw') {
+                window.sfCurrentTool = 'draw';
+                syncToolState();
+            } else if (aria.includes('eraser size') || title.includes('eraser size')) {
+                window.sfCurrentTool = 'erase';
+                syncToolState();
+            } else if (aria.includes('brush size') || title.includes('brush size')) {
+                window.sfCurrentTool = 'draw';
+                syncToolState();
+            }
+
+            setTimeout(syncToolState, 40);
+            setTimeout(syncToolState, 120);
         }
     }, true);
 
-    // Hotkeys: [ and ] for size, { and } (Shift+[ / Shift+]) for opacity
+    // Hotkeys: [ and ] for size, { and } (Shift+[ / Shift+]) for opacity, B for Brush, E for Eraser
     document.addEventListener('keydown', function(e) {
         const active = document.activeElement;
         if (active && ['INPUT', 'TEXTAREA'].includes(active.tagName) && active.type !== 'range') return;
@@ -5218,6 +5289,10 @@ STEREOFASTER_HEAD_HTML = """
         } else if (e.key === ']') {
             e.preventDefault();
             window.sfAdjustSize(1);
+        } else if (e.key === 'b' || e.key === 'B') {
+            window.sfSetTool('draw');
+        } else if (e.key === 'e' || e.key === 'E') {
+            window.sfSetTool('erase');
         }
     });
 
@@ -5283,32 +5358,19 @@ STEREOFASTER_HEAD_HTML = """
         }
     }
 
+    let _sfSyncDebounce = null;
     const sfObserver = new MutationObserver(function() {
         const popovers = document.querySelectorAll('.size_picker, .eraser_picker, .wrap.svelte-1y25b79, div[class*="size_picker"], div[class*="eraser_picker"]');
         for (let i = 0; i < popovers.length; i++) {
             enhancePopover(popovers[i]);
         }
+        if (!_sfSyncDebounce) {
+            _sfSyncDebounce = setTimeout(function() {
+                _sfSyncDebounce = null;
+                syncToolState();
+            }, 60);
+        }
     });
-
-    if (document.body) {
-        sfObserver.observe(document.body, { childList: true, subtree: true });
-    } else {
-        document.addEventListener('DOMContentLoaded', function() {
-            sfObserver.observe(document.body, { childList: true, subtree: true });
-        });
-    }
-})();
-</script>
-
-    if (document.body) {
-        sfObserver.observe(document.body, { childList: true, subtree: true });
-    } else {
-        document.addEventListener('DOMContentLoaded', function() {
-            sfObserver.observe(document.body, { childList: true, subtree: true });
-        });
-    }
-})();
-</script>
 
     if (document.body) {
         sfObserver.observe(document.body, { childList: true, subtree: true });
