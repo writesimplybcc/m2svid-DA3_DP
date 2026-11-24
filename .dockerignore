@@ -1,22 +1,47 @@
-# Virtual Environments
+# Virtual Environments & Environments
 venv/
-.env
+.venv/
+env/
+.env*
+
+# Docker Backups & Local Temp Folders
+docker_gradio_backup/
+docker_tmp_backup/
+New folder/
+docker/
+.idea/
+.vscode/
 
 # Media Folders (Local and Docker Generated)
 source_videos/
 depthmaps_videos/
 final_videos/
 scratch/
+scratch_*
 output_inpainted/
 output_depthmaps/
 output_splatted/
 input_source_clips/
-*.mp4
-*.npz
+data/
+outputs/
+
+# All Media Files (Videos, Images, Archives)
+**/*.mp4
+**/*.avi
+**/*.mov
+**/*.webm
+**/*.npz
+**/*.gif
+**/*.jpg
+**/*.jpeg
+**/*.png
+**/*.tar.gz
+**/*.zip
 
 # Model Weights (Do not copy giant weights into the UI image context)
 ckpts/
 checkpoints/
+weights/
 m2svid/ckpts/
 hi3D/Hi3D-Official-main/ckpts/
 m2svid/third_party/Hi3D-Official/ckpts/
@@ -25,14 +50,22 @@ m2svid/third_party/Hi3D-Official/ckpts/
 **/*.bin
 **/*.safetensors
 **/*.ckpt
+**/*.onnx
 *.pt
 *.pth
 *.bin
 *.safetensors
 *.ckpt
 
-# System/Cache
+# System, Cache & Git (Including Submodule / Third-Party Repos)
 __pycache__/
+**/*__pycache__/
 *.pyc
+*.pyo
 .DS_Store
 .git/
+**/.git
+**/.git/
+**/.gitignore
+*.log
+*.ps1

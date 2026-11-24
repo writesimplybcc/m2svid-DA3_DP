@@ -15,7 +15,6 @@ WORKDIR /workspace/m2svid-DA3_DP
 COPY webui.py .
 COPY pipeline_sidecar.py .
 COPY pipeline_sidecar.json .
-COPY run_webui.ps1 .
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
