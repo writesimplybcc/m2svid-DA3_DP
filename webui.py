@@ -5327,6 +5327,10 @@ STEREOFASTER_HEAD_HTML = """
     }
 
     document.addEventListener('mouseover', function(e) {
+        if (!isCanvasActiveAndVisible()) {
+            window.sfMouseOverCanvas = false;
+            return;
+        }
         window.sfMouseOverCanvas = !!(e.target && e.target.closest && e.target.closest('#depth_paint_canvas, .toolbar-wrap'));
     }, true);
 
@@ -5373,6 +5377,16 @@ STEREOFASTER_HEAD_HTML = """
         }
     }, true);
 
+    function isCanvasActiveAndVisible() {
+        const canvas = document.getElementById('depth_paint_canvas');
+        if (!canvas) return false;
+        // Check if canvas is rendered and visible in active tab/section
+        if (canvas.offsetParent === null) return false;
+        if (canvas.offsetWidth <= 0 || canvas.offsetHeight <= 0) return false;
+        if (typeof canvas.checkVisibility === 'function' && !canvas.checkVisibility()) return false;
+        return true;
+    }
+
     function isEditableTarget(el) {
         if (!el) return false;
         const tag = (el.tagName || '').toUpperCase();
@@ -5392,7 +5406,11 @@ STEREOFASTER_HEAD_HTML = """
     // B = Brush, E = Eraser, P / H = Pan, Space (hold) = Temporary Pan
     // [ and ] = size, { and } = opacity
     // - / _ = Zoom out, + / = = Zoom in, 0 = Fit Zoom
+    // Strictly active ONLY when Depth Editor tab is open, editor is enabled, and canvas is visible!
     document.addEventListener('keydown', function(e) {
+        if (!isCanvasActiveAndVisible()) {
+            return;
+        }
         if (isEditableTarget(document.activeElement) || isEditableTarget(e.target)) {
             return;
         }
@@ -5459,6 +5477,9 @@ STEREOFASTER_HEAD_HTML = """
     });
 
     document.addEventListener('keyup', function(e) {
+        if (!isCanvasActiveAndVisible()) {
+            return;
+        }
         if (isEditableTarget(document.activeElement) || isEditableTarget(e.target)) {
             return;
         }
