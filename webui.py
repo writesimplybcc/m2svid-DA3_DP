@@ -3368,19 +3368,6 @@ def run_depth_editor_action(
                     restore_mask = l_mask & (~sculpted_mask)
                     updated_depth[restore_mask] = depth_seq[restore_mask]
 
-    # Final compositing step: Permanently elevate credits to the foremost plane (>= 0.95)
-    credit_hint = load_clip_credit_sidecar(str(vp))
-    try:
-        updated_depth = detect_and_elevate_credits(
-            updated_depth,
-            frames,
-            credit_text_hint=credit_hint,
-            scene_max_disp=0.85,
-            repair_strength=1.0,
-        )
-    except Exception as e:
-        SF_LOG.warning(f"[DepthEditor] Credit elevation error: {e}")
-
     _prog(0.85, desc="Saving updated depth .npz and .mp4 preview...")
     save_m2svid_compatible_npz(updated_depth, str(out_npz))
     _create_depth_preview_video(updated_depth, str(out_mp4), fps)
@@ -3567,19 +3554,6 @@ def run_depth_editor_option_a(
                 restore_mask = l_mask & (~sculpted_mask)
                 updated_depth[restore_mask] = depth_seq[restore_mask]
 
-    # Final compositing step: Permanently elevate credits to the foremost plane (>= 0.95)
-    credit_hint = load_clip_credit_sidecar(str(vp))
-    try:
-        updated_depth = detect_and_elevate_credits(
-            updated_depth,
-            frames,
-            credit_text_hint=credit_hint,
-            scene_max_disp=0.85,
-            repair_strength=1.0,
-        )
-    except Exception as e:
-        SF_LOG.warning(f"[DepthEditor] Credit elevation error: {e}")
-
     progress(0.9, desc="Saving updated depth .npz and .mp4 preview...")
     save_m2svid_compatible_npz(updated_depth, str(out_npz))
     _create_depth_preview_video(updated_depth, str(out_mp4), fps)
@@ -3757,19 +3731,6 @@ def run_depth_editor_option_b(
                 sculpted_mask = (np.abs(updated_depth - depth_seq) > 0.005)
                 restore_mask = l_mask & (~sculpted_mask)
                 updated_depth[restore_mask] = depth_seq[restore_mask]
-
-    # Final compositing step: Permanently elevate credits to the foremost plane (>= 0.95)
-    credit_hint = load_clip_credit_sidecar(str(vp))
-    try:
-        updated_depth = detect_and_elevate_credits(
-            updated_depth,
-            frames,
-            credit_text_hint=credit_hint,
-            scene_max_disp=0.85,
-            repair_strength=1.0,
-        )
-    except Exception as e:
-        SF_LOG.warning(f"[DepthEditor] Credit elevation error: {e}")
 
     progress(0.9, desc="Saving updated depth .npz and .mp4 preview...")
     save_m2svid_compatible_npz(updated_depth, str(out_npz))
