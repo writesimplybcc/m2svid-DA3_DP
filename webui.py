@@ -5373,21 +5373,28 @@ STEREOFASTER_HEAD_HTML = """
         }
     }, true);
 
+    function isEditableTarget(el) {
+        if (!el) return false;
+        const tag = (el.tagName || '').toUpperCase();
+        if (tag === 'TEXTAREA' || tag === 'SELECT') return true;
+        if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') return true;
+        if (tag === 'INPUT') {
+            const type = (el.type || 'text').toLowerCase();
+            return !['button', 'submit', 'reset', 'checkbox', 'radio', 'range', 'color', 'file'].includes(type);
+        }
+        if (el.closest && el.closest('input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), textarea, select, [contenteditable="true"]')) {
+            return true;
+        }
+        return false;
+    }
+
     // Hotkeys:
     // B = Brush, E = Eraser, P / H = Pan, Space (hold) = Temporary Pan
     // [ and ] = size, { and } = opacity
     // - / _ = Zoom out, + / = = Zoom in, 0 = Fit Zoom
     document.addEventListener('keydown', function(e) {
-        const active = document.activeElement;
-        const isInput = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable) &&
-                        ['text', 'password', 'number', 'search', 'email', 'url'].includes((active.type || '').toLowerCase());
-
-        if (isInput) {
-            if (window.sfMouseOverCanvas) {
-                active.blur();
-            } else {
-                return;
-            }
+        if (isEditableTarget(document.activeElement) || isEditableTarget(e.target)) {
+            return;
         }
 
         // Avoid triggering when user holds Ctrl, Alt, or Meta (except zoom combinations)
@@ -5452,6 +5459,9 @@ STEREOFASTER_HEAD_HTML = """
     });
 
     document.addEventListener('keyup', function(e) {
+        if (isEditableTarget(document.activeElement) || isEditableTarget(e.target)) {
+            return;
+        }
         if (e.key === ' ' || e.code === 'Space') {
             if (window.sfPreSpaceTool) {
                 e.preventDefault();
