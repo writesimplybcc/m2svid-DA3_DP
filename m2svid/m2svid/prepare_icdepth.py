@@ -539,6 +539,7 @@ def detect_and_elevate_credits(
             rgb = cv2.resize(rgb, (W, H), interpolation=cv2.INTER_AREA)
         rgbs.append(rgb)
     rgb_stack = np.stack(rgbs, axis=0)
+    med_rgb = np.median(rgb_stack, axis=0)
 
     if has_hint:
         half = max(4, n_samp // 2)
