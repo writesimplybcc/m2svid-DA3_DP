@@ -836,7 +836,7 @@ def apply_depth_editor_tracking(
     # 1. Define immutable locked holdout matte strictly from depth geometry
     # Only layers whose depth plane is strictly closer to the camera than the active object can occlude it
     locked_mask = np.zeros((T, H, W), dtype=bool)
-    active_d_max = float(np.clip(target_depth, 0.01, 0.99)) + 0.04
+    active_d_max = float(np.clip(target_depth, 0.01, 0.99))
     if layers_state and unlocked_id:
         for l in layers_state:
             if l.get("id") == unlocked_id:
@@ -851,13 +851,12 @@ def apply_depth_editor_tracking(
                 if l_min >= (active_d_max - 0.02):
                     locked_mask |= ((base_depth_seq >= l_min) & (base_depth_seq <= l_max))
 
-    # Holdout occluders strictly above active depth max (and above foreground baseline 0.40)
-    effective_bg_limit = min(active_d_max, 0.70)
-    locked_mask |= (base_depth_seq >= max(0.40, effective_bg_limit))
+    # Holdout occluders strictly closer to camera than active object depth
+    # (protects bridge trusses, beams, and foreground structures >= target_depth + 0.02)
+    fg_occlusion_thresh = max(0.20, active_d_max + 0.02)
+    locked_mask |= (base_depth_seq >= fg_occlusion_thresh)
 
     # 2. Preprocess keyframe masks with selected contour snapping
-    # The user's manual brush strokes on keyframes define the target object shape.
-    # NEVER punch holes through the user's painted keyframe strokes.
     use_tophat = ("top-hat" in str(tophat_snap).lower()) or (isinstance(tophat_snap, bool) and tophat_snap)
     processed_keyframes = {}
     for k_idx, k_mask in keyframe_masks.items():
@@ -869,13 +868,22 @@ def apply_depth_editor_tracking(
             )
         else:
             snapped, _ = apply_direct_brush_fidelity_and_volume(
-                k_mask, target_shape=(H, W), feather_kernel=5, relief_scale=0.035
+                k_mask, target_shape=(H, W), feather_kernel=3, relief_scale=0.0
             )
         processed_keyframes[k_idx] = snapped
 
     if not processed_keyframes:
         SF_LOG.warning("[DepthEditor] No valid keyframes provided; skipping creature injection.")
         creature_masks = np.zeros((T, H, W), dtype=np.float32)
+    elif len(processed_keyframes) >= max(1, T - 2):
+        # User has manually painted almost the entire video (e.g. 72 of 73 frames)
+        # Use exact painted frames directly; do NOT warp phantom strokes onto deliberately unpainted frames
+        if progress:
+            progress(0.2, desc=f"Depth Editor: Applying {len(processed_keyframes)} manual keyframes directly (preserving occluded frames)...")
+        creature_masks = np.zeros((T, H, W), dtype=np.float32)
+        for k_idx, k_mask in processed_keyframes.items():
+            if 0 <= k_idx < T:
+                creature_masks[k_idx] = k_mask
     elif enable_tracking:
         if progress:
             progress(0.2, desc=f"Depth Editor: Optical flow tracking across {len(processed_keyframes)} keyframes...")
@@ -892,11 +900,10 @@ def apply_depth_editor_tracking(
             if 0 <= k_idx < T:
                 creature_masks[k_idx] = k_mask
 
-    # On tracked frames (frames not explicitly painted by the user), allow true foreground occluders
-    # (e.g. bridge truss, pillars) to occlude the moving object
+    # Subtract locked foreground structures on ALL frames (including keyframes)
+    # The painted creature is strictly tucked BEHIND the bridge beams and pillars
     for t in range(T):
-        if t not in processed_keyframes:
-            creature_masks[t] = np.where(locked_mask[t], 0.0, creature_masks[t])
+        creature_masks[t] = np.where(locked_mask[t], 0.0, creature_masks[t])
 
     # 3. Background Aperture Separation: City vs Sky (ONLY if explicitly enabled)
     if separate_sky_city:
@@ -926,7 +933,7 @@ def apply_depth_editor_tracking(
                 out_depth[t, sky_pixels, x] = float(sky_depth)
                 out_depth[t, city_pixels, x] = float(city_depth)
 
-    # 4. Inject sculpted creatures with volumetric relief
+    # 4. Inject sculpted creatures
     if progress:
         progress(0.75, desc=f"Depth Editor: Injecting sculpted creatures at d = {target_depth:.2f}...")
 
@@ -936,23 +943,33 @@ def apply_depth_editor_tracking(
         if np.max(m) < 0.05:
             continue
 
-        bin_m = (m > 0.30).astype(np.uint8)
-        if np.any(bin_m):
-            dist = cv2.distanceTransform(bin_m, cv2.DIST_L2, 5)
-            dist_max = float(np.percentile(dist[bin_m > 0], 90)) if np.any(bin_m) else 1.0
-            vol_relief = np.clip(dist / max(1.0, dist_max), 0.0, 1.0) * 0.035
+        if use_tophat:
+            bin_m = (m > 0.30).astype(np.uint8)
+            if np.any(bin_m):
+                dist = cv2.distanceTransform(bin_m, cv2.DIST_L2, 5)
+                dist_max = float(np.percentile(dist[bin_m > 0], 90)) if np.any(bin_m) else 1.0
+                vol_relief = np.clip(dist / max(1.0, dist_max), 0.0, 1.0) * 0.025
+            else:
+                vol_relief = np.zeros((H, W), dtype=np.float32)
+
+            c_depth = t_depth + vol_relief
+            alpha = np.clip(m, 0.0, 1.0)
+
+            # Blend creature into depth map
+            curr_d = out_depth[t]
+            blended = curr_d * (1.0 - alpha) + c_depth * alpha
+            inject_mask = (m > 0.01) & (~locked_mask[t])
+            out_depth[t] = np.where(inject_mask, blended, curr_d)
         else:
-            vol_relief = np.zeros((H, W), dtype=np.float32)
-
-        c_depth = t_depth + vol_relief
-        alpha = np.clip(m, 0.0, 1.0)
-
-        # Blend creature into depth map
-        curr_d = out_depth[t]
-        blended = curr_d * (1.0 - alpha) + c_depth * alpha
-        # Locked foreground layers (bridge, credits) strictly occlude the creature (creature is behind bridge)
-        inject_mask = (m > 0.01) & (~locked_mask[t])
-        out_depth[t] = np.where(inject_mask, blended, curr_d)
+            # Solid uniform depth: 100% solid target depth, zero dark rim, zero inner gradient
+            curr_d = out_depth[t]
+            solid_mask = (m > 0.35) & (~locked_mask[t])
+            edge_mask = (m > 0.05) & (m <= 0.35) & (~locked_mask[t])
+            # Direct solid insertion
+            out_depth[t] = np.where(solid_mask, t_depth, curr_d)
+            if np.any(edge_mask):
+                norm_alpha = (m[edge_mask] - 0.05) / 0.30
+                out_depth[t][edge_mask] = curr_d[edge_mask] * (1.0 - norm_alpha) + t_depth * norm_alpha
 
     # 5. ABSOLUTE BITWISE GUARANTEE: Re-assert locked layers
     # Any pixel in a locked foreground layer is 100% bitwise identical to base depth

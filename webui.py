@@ -2526,7 +2526,7 @@ def load_reference_frame_for_editor(
     out_npz = DEPTH_DIR / f"{stem}_ICD_depth.npz"
     raw_npz = DEPTH_DIR / f"{stem}_ICD_depth.raw.npz"
     raw_credits_npz = DEPTH_DIR / f"{stem}_raw_credits_depth.npz"
-    src_npz = raw_credits_npz if raw_credits_npz.exists() else (raw_npz if raw_npz.exists() else out_npz)
+    src_npz = raw_npz if raw_npz.exists() else (raw_credits_npz if raw_credits_npz.exists() else out_npz)
 
     if not src_npz.exists():
         return None, default_rows, gr.update(choices=default_choices, value="🔒 All Layers Locked"), gr.update(visible=False), f"⚠️ ICDepth map for '{stem}' not found. Please run ICDepth first.", 0.18, 100, default_badge, []
@@ -3260,7 +3260,7 @@ def run_depth_editor_action(
         SF_LOG.info(f"[DepthEditor] Created untouched raw backup: {raw_npz}")
 
     raw_credits_npz = DEPTH_DIR / f"{stem}_raw_credits_depth.npz"
-    src_npz = raw_credits_npz if raw_credits_npz.exists() else (raw_npz if raw_npz.exists() else out_npz)
+    src_npz = raw_npz if raw_npz.exists() else (raw_credits_npz if raw_credits_npz.exists() else out_npz)
     if not src_npz.exists():
         return f"ICDepth map '{out_npz.name}' not found. Run ICDepth first.", None, None, None, gr.update()
 
@@ -3477,7 +3477,7 @@ def run_depth_editor_option_a(
         SF_LOG.info(f"[DepthEditor] Created untouched raw backup: {raw_npz}")
 
     raw_credits_npz = DEPTH_DIR / f"{stem}_raw_credits_depth.npz"
-    src_npz = raw_credits_npz if raw_credits_npz.exists() else (raw_npz if raw_npz.exists() else out_npz)
+    src_npz = raw_npz if raw_npz.exists() else (raw_credits_npz if raw_credits_npz.exists() else out_npz)
     if not src_npz.exists():
         return f"ICDepth map '{out_npz.name}' not found. Run ICDepth first.", None, None, None, gr.update()
 
@@ -3675,7 +3675,7 @@ def run_depth_editor_option_b(
         SF_LOG.info(f"[DepthEditor] Created untouched raw backup: {raw_npz}")
 
     raw_credits_npz = DEPTH_DIR / f"{stem}_raw_credits_depth.npz"
-    src_npz = raw_credits_npz if raw_credits_npz.exists() else (raw_npz if raw_npz.exists() else out_npz)
+    src_npz = raw_npz if raw_npz.exists() else (raw_credits_npz if raw_credits_npz.exists() else out_npz)
     if not src_npz.exists():
         return f"ICDepth map '{out_npz.name}' not found. Run ICDepth first.", None, None, None, gr.update()
 
