@@ -132,10 +132,10 @@ def detect_scene_layer_hierarchy(
         p_mid = round(float(np.count_nonzero((d_clean > t_bg) & (d_clean < t_fg)) / total * 100.0), 1)
         p_bg = round(float(np.count_nonzero(d_clean <= t_bg) / total * 100.0), 1)
 
-        desc1 = "On-Screen Credits / Text"
-        desc2 = "Foreground Structure (Bridge / Road / Characters)"
-        desc3 = "Midground (Floating Objects / Aperture)"
-        desc4 = "Deep Background (City & Sky Floor)"
+        desc1 = "Credits / Top Overlay"
+        desc2 = "Foreground"
+        desc3 = "Midground"
+        desc4 = "Background / Floor"
 
         if sidecar_layers:
             for sl in sidecar_layers:
@@ -149,12 +149,12 @@ def detect_scene_layer_hierarchy(
         layers = [
             {
                 "id": 1,
-                "name": "Layer 1: On-Screen Credits",
+                "name": "Layer 1: Credits / Overlay",
                 "desc": desc1,
                 "range": f"{t_credits:.2f} – 1.00",
                 "depth_min": round(t_credits, 2),
                 "depth_max": 1.00,
-                "depth_val": 0.90,
+                "depth_val": 0.95,
                 "locked": True,
                 "pixel_pct": p_cred,
             },
@@ -182,7 +182,7 @@ def detect_scene_layer_hierarchy(
             },
             {
                 "id": 4,
-                "name": "Layer 4: Background",
+                "name": "Layer 4: Background / Floor",
                 "desc": desc4,
                 "range": f"0.00 – {t_bg:.2f}",
                 "depth_min": 0.00,
@@ -216,9 +216,9 @@ def detect_scene_layer_hierarchy(
     p_fg = round(float(np.count_nonzero(d_clean > t_fg) / total * 100.0), 1)
     p_mid = round(max(0.0, 100.0 - p_bg - p_fg), 1)
 
-    desc1 = "Foreground (Characters / Foremost Objects)"
-    desc2 = "Midground (Structures / Environment)"
-    desc3 = "Background (Sky / Distant Scenery)"
+    desc1 = "Foreground"
+    desc2 = "Midground"
+    desc3 = "Background / Floor"
 
     if sidecar_layers:
         for sl in sidecar_layers:
@@ -256,7 +256,7 @@ def detect_scene_layer_hierarchy(
         },
         {
             "id": 3,
-            "name": "Layer 3: Background",
+            "name": "Layer 3: Background / Floor",
             "desc": desc3,
             "range": f"0.00 – {t_bg:.2f}",
             "depth_min": 0.00,
@@ -805,6 +805,45 @@ def get_layer_depth_bounds(l: Dict[str, Any]) -> Tuple[float, float]:
     return 0.0, 1.0
 
 
+def apply_layer_depth_transfer(
+    d_vals: np.ndarray,
+    d_min: float,
+    d_max: float,
+    mode: str = "straight",
+    amount: float = 0.0,
+) -> np.ndarray:
+    """Non-destructively transform depth values within [d_min, d_max].
+
+    Modes:
+    - 'straight' / 'linear': d_out = clip(d_in + amount, d_min, d_max)
+    - 'curve_up' / 'lift': u = (d_in - d_min) / (d_max - d_min) in [0, 1]
+                          gamma = 1.0 / (1.0 + amount * 3.0)  (gamma < 1.0)
+                          u_out = u ** gamma
+                          d_out = d_min + u_out * (d_max - d_min)
+    - 'curve_down' / 'ramp': gamma = 1.0 + amount * 3.0  (gamma > 1.0)
+                            u_out = u ** gamma
+                            d_out = d_min + u_out * (d_max - d_min)
+    """
+    span = max(1e-6, float(d_max - d_min))
+    mode_clean = str(mode).lower()
+
+    if "straight" in mode_clean or "linear" in mode_clean:
+        return np.clip(d_vals + float(amount), d_min, d_max)
+
+    u = np.clip((d_vals - d_min) / span, 0.0, 1.0)
+
+    if "up" in mode_clean or "lift" in mode_clean:
+        gamma = 1.0 / max(0.05, 1.0 + float(amount) * 3.0)
+        u_out = np.power(u, gamma)
+    elif "down" in mode_clean or "ramp" in mode_clean:
+        gamma = 1.0 + float(amount) * 3.0
+        u_out = np.power(u, gamma)
+    else:
+        u_out = u
+
+    return d_min + u_out * span
+
+
 def apply_depth_editor_tracking(
     rgb_frames: List[np.ndarray],
     base_depth_seq: np.ndarray,
@@ -818,6 +857,9 @@ def apply_depth_editor_tracking(
     unlocked_id: Optional[int] = None,
     layers_state: Optional[List[Dict[str, Any]]] = None,
     enable_tracking: bool = True,
+    boost_mode: str = "straight",
+    boost_amount: float = 0.0,
+    video_stem: Optional[str] = None,
     progress=None,
 ) -> np.ndarray:
     """Execute the Depth Editor tracking and holdout-matte layering pipeline.
@@ -832,6 +874,21 @@ def apply_depth_editor_tracking(
     """
     T, H, W = base_depth_seq.shape
     out_depth = base_depth_seq.copy().astype(np.float32)
+
+    # Auto-load keyframe masks from disk if available
+    if video_stem:
+        from pathlib import Path
+        masks_path = Path("source_videos") / f"{video_stem}.masks.npz"
+        if masks_path.exists():
+            try:
+                with np.load(str(masks_path)) as m_data:
+                    for k in m_data.keys():
+                        if not k.startswith("L") and k.isdigit():
+                            idx = int(k)
+                            if idx not in keyframe_masks or keyframe_masks[idx] is None or not np.any(keyframe_masks[idx]):
+                                keyframe_masks[idx] = m_data[k].astype(np.float32)
+            except Exception as e:
+                SF_LOG.warning(f"Could not load disk masks from {masks_path}: {e}")
 
     # 1. Define immutable locked holdout matte strictly from depth geometry
     # Only layers whose depth plane is strictly closer to the camera than the active object can occlude it
@@ -905,8 +962,24 @@ def apply_depth_editor_tracking(
     for t in range(T):
         creature_masks[t] = np.where(locked_mask[t], 0.0, creature_masks[t])
 
-    # 3. Background Aperture Separation: City vs Sky (ONLY if explicitly enabled)
-    if separate_sky_city:
+    # 3. Non-Destructive Layer Depth Transfer Function (Boost / Lift / Curve)
+    # Applied strictly to the unlocked layer within its bounds [unlocked_min, unlocked_max]
+    if unlocked_id is not None and layers_state and abs(boost_amount) > 1e-4:
+        for l in layers_state:
+            if l.get("id") == unlocked_id:
+                u_min, u_max = get_layer_depth_bounds(l)
+                if u_max > u_min:
+                    if progress:
+                        progress(0.5, desc=f"Applying {boost_mode} depth transfer to Layer {unlocked_id}...")
+                    for t in range(T):
+                        layer_pix = (base_depth_seq[t] >= u_min) & (base_depth_seq[t] <= u_max) & (~locked_mask[t])
+                        if np.any(layer_pix):
+                            d_orig = base_depth_seq[t][layer_pix]
+                            out_depth[t][layer_pix] = apply_layer_depth_transfer(
+                                d_orig, u_min, u_max, mode=boost_mode, amount=boost_amount
+                            )
+                break
+    elif separate_sky_city:
         if progress:
             progress(0.5, desc="Depth Editor: Separating Cityscape and Sky floor in aperture...")
         aperture_mask = ~locked_mask
@@ -925,11 +998,8 @@ def apply_depth_editor_tracking(
             for x in range(W):
                 hy = int(horizon_smooth[x])
                 ap_col = aperture_mask[t, :, x]
-                # Above skyline horizon in aperture -> Sky
                 sky_pixels = ap_col & (np.arange(H) < hy) & (c_mask[:, x] < 0.20)
-                # Below skyline horizon down to road in aperture -> City
                 city_pixels = ap_col & (np.arange(H) >= hy) & (c_mask[:, x] < 0.20)
-
                 out_depth[t, sky_pixels, x] = float(sky_depth)
                 out_depth[t, city_pixels, x] = float(city_depth)
 
@@ -975,6 +1045,22 @@ def apply_depth_editor_tracking(
     # Any pixel in a locked foreground layer is 100% bitwise identical to base depth
     for t in range(T):
         out_depth[t, locked_mask[t]] = base_depth_seq[t, locked_mask[t]]
+
+    # 6. Re-assert Credit / Typography Overlay on top if credits file exists
+    if video_stem:
+        from pathlib import Path
+        credits_npz = Path("depthmaps_videos") / f"{video_stem}_credits.npz"
+        if credits_npz.exists():
+            try:
+                with np.load(str(credits_npz)) as c_data:
+                    if "mask" in c_data:
+                        c_mask = c_data["mask"]
+                        for t in range(T):
+                            c_t = c_mask[min(t, len(c_mask) - 1)]
+                            if np.any(c_t > 0.5):
+                                out_depth[t, c_t > 0.5] = 0.95
+            except Exception as e:
+                SF_LOG.warning(f"Could not re-assert credits from {credits_npz}: {e}")
 
     return out_depth
 

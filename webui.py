@@ -2475,12 +2475,50 @@ def resolve_editor_canvas_background(
     d_frame: Optional[np.ndarray],
     canvas_mode: str = "🖼️ RGB Source Video",
     show_markers: bool = False,
+    layer_solo: str = "👁️ All Layers (Full Composite)",
+    show_credits: bool = True,
+    credit_mask: Optional[np.ndarray] = None,
+    layers_info: Optional[List[Dict[str, Any]]] = None,
 ) -> np.ndarray:
-    """Generate canvas background based on user-selected mode (RGB video vs Depth Map)."""
+    """Generate canvas background based on user-selected mode (RGB video vs Depth Map) with layer soloing."""
     if d_frame is not None and "depth" in str(canvas_mode).lower():
         d_clean = np.clip(d_frame.astype(np.float32), 0.0, 1.0)
+
+        # Composite credits if enabled and present
+        if show_credits and credit_mask is not None and np.any(credit_mask > 0.5):
+            d_clean = np.where(credit_mask > 0.5, 0.95, d_clean)
+
+        # Apply Layer Solo filter if a specific layer is soloed
+        solo_clean = str(layer_solo).lower()
+        if "all" not in solo_clean and layers_info:
+            target_id = None
+            for l in layers_info:
+                lname = str(l.get("name", "")).lower()
+                ldesc = str(l.get("desc", "")).lower()
+                if "fore" in solo_clean and ("fore" in lname or "fore" in ldesc):
+                    target_id = l.get("id")
+                    break
+                elif "mid" in solo_clean and ("mid" in lname or "mid" in ldesc):
+                    target_id = l.get("id")
+                    break
+                elif ("back" in solo_clean or "floor" in solo_clean) and ("back" in lname or "floor" in lname or "back" in ldesc or "floor" in ldesc):
+                    target_id = l.get("id")
+                    break
+                elif "credit" in solo_clean and ("credit" in lname or "credit" in ldesc):
+                    target_id = l.get("id")
+                    break
+
+            if target_id is not None:
+                from m2svid.object_layer_depth import get_layer_depth_bounds
+                for l in layers_info:
+                    if l.get("id") == target_id:
+                        l_min, l_max = get_layer_depth_bounds(l)
+                        solo_mask = (d_clean >= l_min) & (d_clean <= l_max)
+                        d_clean = np.where(solo_mask, d_clean, 0.0)
+                        break
+
         if "boosted" in str(canvas_mode).lower():
-            # Stretch the darker aperture range (bottom 0.25) so faint features (dugongs, skyline) are bright and clear
+            # Stretch the darker aperture range (bottom 0.25) so faint features are bright and clear
             d_norm = np.clip(d_clean / 0.25, 0.0, 1.0)
             d_u8 = (d_norm * 255.0).astype(np.uint8)
             return cv2.cvtColor(d_u8, cv2.COLOR_GRAY2RGB)
@@ -2513,31 +2551,35 @@ def build_editor_value_with_keyframe_mask(
     keyframe_dict: Optional[Dict[int, Any]] = None,
     mask_color: str = "🟢 Neon Green (#00ff66)",
     mask_opacity: float = 0.50,
+    show_mask: bool = True,
 ) -> Dict[str, Any]:
     """Construct ImageEditor dict loading existing painted strokes for frame_idx if recorded."""
     layers_list = []
-    kf_dict = dict(keyframe_dict or {})
-    idx_int = int(frame_idx)
-    mask = kf_dict.get(idx_int)
-    if mask is not None and np.any(mask > 0.01):
-        m_float = np.clip(mask.astype(np.float32), 0.0, 1.0)
-        H_c, W_c = rgb_canvas.shape[:2]
-        if m_float.shape[:2] != (H_c, W_c):
-            m_float = cv2.resize(m_float, (W_c, H_c), interpolation=cv2.INTER_NEAREST)
+    if show_mask:
+        kf_dict = dict(keyframe_dict or {})
+        idx_int = int(frame_idx)
+        mask = kf_dict.get(idx_int)
+        if mask is not None and np.any(mask > 0.01):
+            m_float = np.clip(mask.astype(np.float32), 0.0, 1.0)
+            H_c, W_c = rgb_canvas.shape[:2]
+            if m_float.shape[:2] != (H_c, W_c):
+                m_float = cv2.resize(m_float, (W_c, H_c), interpolation=cv2.INTER_NEAREST)
 
-        color_rgb = MASK_OVERLAY_COLORS.get(mask_color, (0, 255, 102))
-        alpha_byte = int(round(np.clip(mask_opacity, 0.05, 1.0) * 255.0))
+            color_rgb = MASK_OVERLAY_COLORS.get(mask_color, (0, 255, 102))
+            alpha_byte = int(round(np.clip(mask_opacity, 0.05, 1.0) * 255.0))
 
-        rgba_layer = np.zeros((H_c, W_c, 4), dtype=np.uint8)
-        rgba_layer[..., 0] = color_rgb[0]
-        rgba_layer[..., 1] = color_rgb[1]
-        rgba_layer[..., 2] = color_rgb[2]
-        rgba_layer[..., 3] = (m_float * alpha_byte).astype(np.uint8)
-        layers_list.append(rgba_layer)
+            rgba_layer = np.zeros((H_c, W_c, 4), dtype=np.uint8)
+            rgba_layer[..., 0] = color_rgb[0]
+            rgba_layer[..., 1] = color_rgb[1]
+            rgba_layer[..., 2] = color_rgb[2]
+            rgba_layer[..., 3] = (m_float * alpha_byte).astype(np.uint8)
+            layers_list.append(rgba_layer)
 
-        alpha_norm = (rgba_layer[..., 3:4] / 255.0).astype(np.float32)
-        comp_rgb = (rgb_canvas.astype(np.float32) * (1.0 - alpha_norm) + rgba_layer[..., :3].astype(np.float32) * alpha_norm)
-        composite_canvas = np.clip(comp_rgb, 0, 255).astype(np.uint8)
+            alpha_norm = (rgba_layer[..., 3:4] / 255.0).astype(np.float32)
+            comp_rgb = (rgb_canvas.astype(np.float32) * (1.0 - alpha_norm) + rgba_layer[..., :3].astype(np.float32) * alpha_norm)
+            composite_canvas = np.clip(comp_rgb, 0, 255).astype(np.uint8)
+        else:
+            composite_canvas = rgb_canvas
     else:
         composite_canvas = rgb_canvas
 
@@ -2557,18 +2599,21 @@ def load_reference_frame_for_editor(
     canvas_mode: str = "🖼️ RGB Source Video",
     mask_color: str = "🟢 Neon Green (#00ff66)",
     mask_opacity: float = 0.50,
+    layer_solo: str = "👁️ All Layers (Full Composite)",
+    show_credits: bool = True,
+    show_mask: bool = True,
 ):
-    """Load reference frame, dynamically analyze NPZ into 3 layers (all locked by default), and render canvas."""
+    """Load reference frame, dynamically analyze NPZ into semantic layers (all locked by default), and render canvas."""
     default_rows = [
-        ["Layer 1", "Foreground (Characters / Foremost Objects)", "0.54 – 1.00", "0.0%", "🔒 Locked"],
-        ["Layer 2", "Midground (Structures / Environment)", "0.21 – 0.54", "0.0%", "🔒 Locked"],
-        ["Layer 3", "Background (Sky / Distant Scenery)", "0.00 – 0.21", "0.0%", "🔒 Locked"],
+        ["Layer 1", "Foreground", "0.54 – 1.00", "0.0%", "🔒 Locked"],
+        ["Layer 2", "Midground", "0.21 – 0.54", "0.0%", "🔒 Locked"],
+        ["Layer 3", "Background / Floor", "0.00 – 0.21", "0.0%", "🔒 Locked"],
     ]
     default_choices = [
         "🔒 All Layers Locked",
-        "Layer 1: Foreground (Characters / Foremost Objects)",
-        "Layer 2: Midground (Structures / Environment)",
-        "Layer 3: Background (Sky / Distant Scenery)",
+        "Layer 1: Foreground",
+        "Layer 2: Midground",
+        "Layer 3: Background / Floor",
     ]
     default_badge = "📌 **Keyframes recorded:** None *(Brush on canvas, then click 'Record Keyframe')*"
     default_banner = "🔒 **All layers are currently locked.** In the table above, all layers are protected. Select a layer from **'Unlock Layer for Editing'** to enable editing controls."
@@ -2650,8 +2695,22 @@ def load_reference_frame_for_editor(
     else:
         banner_text = default_banner
 
+    # Check for credits file to allow toggling credits visibility
+    credits_npz = DEPTH_DIR / f"{stem}_credits.npz"
+    credit_mask = None
+    if credits_npz.exists():
+        try:
+            with np.load(str(credits_npz)) as c_data:
+                if "mask" in c_data:
+                    cm_all = c_data["mask"]
+                    credit_mask = cm_all[min(cm_all.shape[0] - 1, idx)]
+        except Exception:
+            pass
+
     rgb_canvas = resolve_editor_canvas_background(
-        bgr, d_frame, canvas_mode=canvas_mode, show_markers=show_markers
+        bgr, d_frame, canvas_mode=canvas_mode, show_markers=show_markers,
+        layer_solo=layer_solo, show_credits=show_credits,
+        credit_mask=credit_mask, layers_info=layers
     )
 
     kf_dict = dict(keyframe_dict or {})
@@ -2661,7 +2720,7 @@ def load_reference_frame_for_editor(
             try:
                 with np.load(str(masks_npz_path)) as m_data:
                     for k in m_data.files:
-                        if k.isdigit():
+                        if not k.startswith("L") and k.isdigit():
                             k_int = int(k)
                             if k_int not in kf_dict:
                                 kf_dict[k_int] = m_data[k].astype(np.float32)
@@ -2669,7 +2728,35 @@ def load_reference_frame_for_editor(
                 SF_LOG.warning(f"Could not load keyframe masks from {masks_npz_path}: {e}")
 
     editor_value = build_editor_value_with_keyframe_mask(
-        rgb_canvas, idx, kf_dict, mask_color=mask_color, mask_opacity=mask_opacity
+        rgb_canvas, idx, kf_dict, mask_color=mask_color, mask_opacity=mask_opacity,
+        show_mask=show_mask
+    )
+
+    kf_keys = sorted(list(kf_dict.keys()))
+    if len(kf_keys) > 10:
+        badge_text = f"📍 **Frame {idx}:** Painted strokes loaded for all {len(kf_keys)} frames on canvas"
+    elif kf_keys:
+        badge_text = f"📌 **Keyframes recorded:** `{kf_keys}` (Total: {len(kf_keys)})"
+    else:
+        badge_text = default_badge
+
+    suggested_depth = 0.18
+    if unlocked_id is not None:
+        for l in layers:
+            if l.get("id") == unlocked_id:
+                suggested_depth = float(l.get("depth_val", 0.18))
+                break
+
+    return (
+        editor_value,
+        table_data,
+        gr.update(choices=unlock_choices, value=(unlocked_choice if unlocked_choice in unlock_choices else "🔒 All Layers Locked")),
+        gr.update(visible=controls_visible),
+        banner_text,
+        suggested_depth,
+        max(1, total_frames - 1),
+        badge_text,
+        layers,
     )
 
     kf_keys = sorted(list(kf_dict.keys()))
@@ -2709,6 +2796,9 @@ def on_toggle_interactive_layering(
     canvas_mode: str = "🖼️ RGB Source Video",
     mask_color: str = "🟢 Neon Green (#00ff66)",
     mask_opacity: float = 0.50,
+    layer_solo: str = "👁️ All Layers (Full Composite)",
+    show_credits: bool = True,
+    show_mask: bool = True,
 ):
     """Show/hide Depth Editor section and load reference frame when enabled."""
     if not is_enabled:
@@ -2727,7 +2817,8 @@ def on_toggle_interactive_layering(
 
     editor_val, table_data, unlock_update, controls_update, banner_text, t_depth, max_f, badge_text, layers = load_reference_frame_for_editor(
         input_video, frame_idx, show_markers=show_markers, keyframe_dict=keyframe_dict, unlocked_choice="🔒 All Layers Locked",
-        canvas_mode=canvas_mode, mask_color=mask_color, mask_opacity=mask_opacity
+        canvas_mode=canvas_mode, mask_color=mask_color, mask_opacity=mask_opacity,
+        layer_solo=layer_solo, show_credits=show_credits, show_mask=show_mask,
     )
     return (
         gr.update(visible=True),
@@ -2983,6 +3074,10 @@ def on_scrub_reference_frame(
     canvas_mode: str = "🖼️ RGB Source Video",
     mask_color: str = "🟢 Neon Green (#00ff66)",
     mask_opacity: float = 0.50,
+    layer_solo: str = "👁️ All Layers (Full Composite)",
+    show_credits: bool = True,
+    show_mask: bool = True,
+    layers_state: Optional[List[Dict[str, Any]]] = None,
 ):
     """Update canvas background when user scrubs the frame slider, keeping the exact slider position."""
     default_badge = "📌 **Keyframes recorded:** None *(Brush on canvas, then click 'Record Keyframe')*"
@@ -3017,8 +3112,27 @@ def on_scrub_reference_frame(
                 idx_clamped = min(depth_all.shape[0] - 1, idx)
                 d_frame = depth_all[idx_clamped].astype(np.float32)
 
+    # Check for credits file to allow toggling credits visibility
+    credits_npz = DEPTH_DIR / f"{vp.stem}_credits.npz"
+    credit_mask = None
+    if credits_npz.exists():
+        try:
+            with np.load(str(credits_npz)) as c_data:
+                if "mask" in c_data:
+                    cm_all = c_data["mask"]
+                    credit_mask = cm_all[min(cm_all.shape[0] - 1, idx)]
+        except Exception:
+            pass
+
+    current_layers = layers_state
+    if current_layers is None and d_frame is not None:
+        from m2svid.object_layer_depth import detect_scene_layer_hierarchy
+        current_layers = detect_scene_layer_hierarchy(d_frame)
+
     rgb_canvas = resolve_editor_canvas_background(
-        bgr, d_frame, canvas_mode=canvas_mode, show_markers=show_markers
+        bgr, d_frame, canvas_mode=canvas_mode, show_markers=show_markers,
+        layer_solo=layer_solo, show_credits=show_credits,
+        credit_mask=credit_mask, layers_info=current_layers,
     )
 
     kf_dict = dict(keyframe_dict or {})
@@ -3028,7 +3142,7 @@ def on_scrub_reference_frame(
             try:
                 with np.load(str(masks_npz_path)) as m_data:
                     for k in m_data.files:
-                        if k.isdigit():
+                        if not k.startswith("L") and k.isdigit():
                             k_int = int(k)
                             if k_int not in kf_dict:
                                 kf_dict[k_int] = m_data[k].astype(np.float32)
@@ -3036,7 +3150,8 @@ def on_scrub_reference_frame(
                 SF_LOG.warning(f"Could not load keyframe masks from {masks_npz_path}: {e}")
 
     editor_value = build_editor_value_with_keyframe_mask(
-        rgb_canvas, idx, kf_dict, mask_color=mask_color, mask_opacity=mask_opacity
+        rgb_canvas, idx, kf_dict, mask_color=mask_color, mask_opacity=mask_opacity,
+        show_mask=show_mask,
     )
 
     kf_keys = sorted(list(kf_dict.keys()))
@@ -3050,6 +3165,8 @@ def on_scrub_reference_frame(
         badge = f"📍 Frame {idx} ({mask_info}). Recorded keyframes: `{kf_keys}`"
     else:
         badge = f"📍 Frame {idx} (Unrecorded). Brush and click 'Record Keyframe'."
+
+    return editor_value, badge
 
     return editor_value, badge
 
@@ -3204,6 +3321,10 @@ def track_and_paint_all_frames_action(
     canvas_mode: str = "🖼️ RGB Source Video",
     mask_color: str = "🟢 Neon Green (#00ff66)",
     mask_opacity: float = 0.50,
+    layer_solo: str = "👁️ All Layers (Full Composite)",
+    show_credits: bool = True,
+    show_mask: bool = True,
+    layers_state: Optional[List[Dict[str, Any]]] = None,
     progress=gr.Progress(track_tqdm=True),
 ):
     """Run optical flow tracking on painted keyframes and paint masks on Depth Paint Canvas for all frames."""
@@ -3284,8 +3405,32 @@ def track_and_paint_all_frames_action(
                 idx_clamped = min(depth_all.shape[0] - 1, idx)
                 d_frame = depth_all[idx_clamped].astype(np.float32)
 
-    rgb_canvas = resolve_editor_canvas_background(frames[idx], d_frame, canvas_mode=canvas_mode)
-    editor_val = build_editor_value_with_keyframe_mask(rgb_canvas, idx, updated_dict, mask_color=mask_color, mask_opacity=mask_opacity)
+    # Check for credits file
+    credits_npz = DEPTH_DIR / f"{vp.stem}_credits.npz"
+    credit_mask = None
+    if credits_npz.exists():
+        try:
+            with np.load(str(credits_npz)) as c_data:
+                if "mask" in c_data:
+                    cm_all = c_data["mask"]
+                    credit_mask = cm_all[min(cm_all.shape[0] - 1, idx)]
+        except Exception:
+            pass
+
+    current_layers = layers_state
+    if current_layers is None and d_frame is not None:
+        from m2svid.object_layer_depth import detect_scene_layer_hierarchy
+        current_layers = detect_scene_layer_hierarchy(d_frame)
+
+    rgb_canvas = resolve_editor_canvas_background(
+        frames[idx], d_frame, canvas_mode=canvas_mode,
+        layer_solo=layer_solo, show_credits=show_credits,
+        credit_mask=credit_mask, layers_info=current_layers,
+    )
+    editor_val = build_editor_value_with_keyframe_mask(
+        rgb_canvas, idx, updated_dict, mask_color=mask_color, mask_opacity=mask_opacity,
+        show_mask=show_mask,
+    )
 
     badge = f"🎯 **Tracking complete!** All {len(frames)} frames tracked and painted on canvas. Scrub the slider to inspect any frame!"
     status = f"✅ Tracked painted object across all {len(frames)} frames. Canvas updated with tracked strokes!"
@@ -3299,17 +3444,17 @@ def run_depth_editor_action(
     editor_data: Any,
     keyframe_dict: Optional[Dict[int, Any]],
     target_creatures_depth: float,
-    target_city_depth: float,
-    target_sky_depth: float,
-    skyline_split: bool = True,
-    tophat_snap: bool = True,
+    boost_mode: str = "📈 Curve Up (Lift Lower/Distant Values)",
+    boost_strength: float = 0.0,
+    tophat_snap: bool = False,
     save_sidecar: bool = True,
     enable_tracking: bool = True,
     unlocked_choice: str = "🔒 All Layers Locked",
     layers_state: Optional[List[Dict[str, Any]]] = None,
     progress=gr.Progress(track_tqdm=True),
+    **kwargs,
 ):
-    """Execute full Depth Editor holdout-matte layering, optical flow tracking, and NPZ generation."""
+    """Execute full Depth Editor holdout-matte layering, non-destructive boosting, and NPZ generation."""
     _prog = progress if callable(progress) else (lambda *args, **kwargs: None)
     if not unlocked_choice or unlocked_choice == "🔒 All Layers Locked":
         return (
@@ -3345,7 +3490,7 @@ def run_depth_editor_action(
         save_layers_sidecar,
         get_layer_depth_bounds,
     )
-    from m2svid.prepare_icdepth import load_clip_credit_sidecar, detect_and_elevate_credits
+    from m2svid.prepare_icdepth import load_clip_credit_sidecar
 
     cap = cv2.VideoCapture(str(vp))
     fps = cap.get(cv2.CAP_PROP_FPS) or 24.0
@@ -3362,8 +3507,22 @@ def run_depth_editor_action(
 
     H, W = frames[0].shape[:2]
 
-    # Resolve keyframe masks
+    # Resolve keyframe masks (from disk + memory)
     k_dict = {}
+    masks_npz_path = vp.parent / f"{stem}.masks.npz"
+    if masks_npz_path.exists():
+        try:
+            with np.load(str(masks_npz_path)) as m_data:
+                for k in m_data.files:
+                    if not k.startswith("L") and k.isdigit():
+                        ik = int(k)
+                        m_val = m_data[k].astype(np.float32)
+                        if m_val.shape[:2] != (H, W):
+                            m_val = cv2.resize(m_val, (W, H), interpolation=cv2.INTER_NEAREST)
+                        k_dict[ik] = m_val
+        except Exception as e:
+            SF_LOG.warning(f"Could not load keyframe masks from {masks_npz_path}: {e}")
+
     for k, v in dict(keyframe_dict or {}).items():
         if v is not None and np.max(v) > 0.01:
             if v.shape[:2] != (H, W):
@@ -3413,14 +3572,14 @@ def run_depth_editor_action(
         base_depth_seq=depth_seq,
         keyframe_masks=k_dict,
         target_depth=float(target_creatures_depth),
-        city_depth=float(target_city_depth),
-        sky_depth=float(target_sky_depth),
-        separate_sky_city=bool(skyline_split),
         tophat_snap=bool(tophat_snap),
         lock_threshold=lock_threshold,
         unlocked_id=unlocked_id,
         layers_state=layers_state,
         enable_tracking=bool(enable_tracking),
+        boost_mode=str(boost_mode),
+        boost_amount=float(boost_strength),
+        video_stem=stem,
         progress=_prog,
     )
 
@@ -6180,9 +6339,9 @@ def create_stereofaster_ui():
                         headers=["Layer ID", "Description (Click to Edit)", "Depth Range", "% Pixels", "Status"],
                         datatype=["str", "str", "str", "str", "str"],
                         value=[
-                            ["Layer 1", "Foreground (Characters / Foremost Objects)", "0.54 – 1.00", "0.0%", "🔒 Locked"],
-                            ["Layer 2", "Midground (Structures / Environment)", "0.21 – 0.54", "0.0%", "🔒 Locked"],
-                            ["Layer 3", "Background (Sky / Distant Scenery)", "0.00 – 0.21", "0.0%", "🔒 Locked"],
+                            ["Layer 1", "Foreground", "0.54 – 1.00", "0.0%", "🔒 Locked"],
+                            ["Layer 2", "Midground", "0.21 – 0.54", "0.0%", "🔒 Locked"],
+                            ["Layer 3", "Background / Floor", "0.00 – 0.21", "0.0%", "🔒 Locked"],
                         ],
                         interactive=True,
                         wrap=True,
@@ -6193,9 +6352,9 @@ def create_stereofaster_ui():
                             icd_obj_unlock_select = gr.Radio(
                                 choices=[
                                     "🔒 All Layers Locked",
-                                    "Layer 1: Foreground (Characters / Foremost Objects)",
-                                    "Layer 2: Midground (Structures / Environment)",
-                                    "Layer 3: Background (Sky / Distant Scenery)",
+                                    "Layer 1: Foreground",
+                                    "Layer 2: Midground",
+                                    "Layer 3: Background / Floor",
                                 ],
                                 value="🔒 All Layers Locked",
                                 label="🔓 Unlock Layer for Editing",
@@ -6215,10 +6374,9 @@ def create_stereofaster_ui():
                         with gr.Group():
                             gr.Markdown(
                                 "### 🎨 Method 1: Paint & Track (Interactive Object Sculpting)\n"
-                                "*Brush over target objects (e.g. fish, dugong) on one or more reference keyframes. "
-                                "StereoFaster snaps rough strokes to exact contours with Top-Hat filtering, calculates "
-                                "organic 3D volumetric curved relief, separates the horizon/skyline, and tracks objects "
-                                "bidirectionally across the clip using optical flow.*"
+                                "*Brush over target objects on one or more reference keyframes. "
+                                "StereoFaster isolates painted strokes, calculates organic 3D volumetric relief, "
+                                "and tracks objects across the clip while respecting locked holdout mattes.*"
                             )
                             with gr.Row():
                                 with gr.Column(scale=5):
@@ -6255,6 +6413,32 @@ def create_stereofaster_ui():
                                     label="Canvas Background View",
                                     info="Switch canvas background between camera video and underlying depth frames.",
                                     scale=3,
+                                )
+                                icd_obj_layer_solo = gr.Dropdown(
+                                    choices=[
+                                        "👁️ All Layers (Full Composite)",
+                                        "👁️ Solo: Foreground Only",
+                                        "👁️ Solo: Midground Only",
+                                        "👁️ Solo: Background / Floor Only",
+                                    ],
+                                    value="👁️ All Layers (Full Composite)",
+                                    label="Layer Solo Visibility",
+                                    info="Isolate and view only a specific depth plane on canvas.",
+                                    scale=2,
+                                )
+                                icd_obj_show_credits = gr.Checkbox(
+                                    label="Show Credits Overlay",
+                                    value=True,
+                                    info="Toggle on-screen text/credit depth layer visibility.",
+                                    scale=1,
+                                )
+
+                            with gr.Row():
+                                icd_obj_show_mask = gr.Checkbox(
+                                    label="👁️ Show Painted Mask",
+                                    value=True,
+                                    info="Toggle painted keyframe mask overlay on/off.",
+                                    scale=1,
                                 )
                                 icd_obj_mask_color = gr.Dropdown(
                                     choices=[
@@ -6350,15 +6534,22 @@ def create_stereofaster_ui():
                             )
 
                             with gr.Row():
-                                icd_obj_city_depth = gr.Slider(
-                                    0.00, 0.20, value=0.06, step=0.01,
-                                    label="🏙️ Mid/Distant Silhouette Depth",
-                                    info="Depth for intermediate aperture structures."
+                                icd_obj_boost_mode = gr.Radio(
+                                    choices=[
+                                        "📈 Curve Up (Lift Lower/Distant Values)",
+                                        "📏 Straight Incremental (Linear Offset)",
+                                        "📉 Curve Down (Ramp Near Upper Edge)",
+                                    ],
+                                    value="📈 Curve Up (Lift Lower/Distant Values)",
+                                    label="Unlocked Layer Depth Transfer / Boosting Profile",
+                                    info="Non-destructive transfer curve applied strictly to the unlocked layer.",
+                                    scale=3,
                                 )
-                                icd_obj_sky_depth = gr.Slider(
-                                    0.00, 0.10, value=0.00, step=0.01,
-                                    label="🌌 Deep Floor Depth",
-                                    info="Depth of deepest floor (0.00 = infinite distance)."
+                                icd_obj_boost_strength = gr.Slider(
+                                    0.00, 1.00, value=0.00, step=0.02,
+                                    label="Boost / Lift Strength",
+                                    info="Curvature intensity (for Curve Up/Down) or depth offset Δ (for Straight).",
+                                    scale=2,
                                 )
 
                             with gr.Row():
@@ -7099,6 +7290,9 @@ def create_stereofaster_ui():
                 icd_obj_canvas_bg_mode,
                 icd_obj_mask_color,
                 icd_obj_mask_opacity,
+                icd_obj_layer_solo,
+                icd_obj_show_credits,
+                icd_obj_show_mask,
             ],
             outputs=[
                 icd_obj_main_section,
@@ -7138,87 +7332,71 @@ def create_stereofaster_ui():
             outputs=[layer_info_state],
         )
 
+        scrub_inputs = [
+            obj_step1_dropdown,
+            icd_obj_frame_slider,
+            icd_obj_show_markers,
+            keyframe_state,
+            icd_obj_canvas_bg_mode,
+            icd_obj_mask_color,
+            icd_obj_mask_opacity,
+            icd_obj_layer_solo,
+            icd_obj_show_credits,
+            icd_obj_show_mask,
+            layer_info_state,
+        ]
+
         icd_obj_frame_slider.release(
             fn=on_scrub_reference_frame,
-            inputs=[
-                obj_step1_dropdown,
-                icd_obj_frame_slider,
-                icd_obj_show_markers,
-                keyframe_state,
-                icd_obj_canvas_bg_mode,
-                icd_obj_mask_color,
-                icd_obj_mask_opacity,
-            ],
+            inputs=scrub_inputs,
             outputs=[icd_obj_editor, icd_obj_kf_badge],
         )
 
         icd_obj_reload_btn.click(
             fn=on_scrub_reference_frame,
-            inputs=[
-                obj_step1_dropdown,
-                icd_obj_frame_slider,
-                icd_obj_show_markers,
-                keyframe_state,
-                icd_obj_canvas_bg_mode,
-                icd_obj_mask_color,
-                icd_obj_mask_opacity,
-            ],
+            inputs=scrub_inputs,
             outputs=[icd_obj_editor, icd_obj_kf_badge],
         )
 
         icd_obj_show_markers.change(
             fn=on_scrub_reference_frame,
-            inputs=[
-                obj_step1_dropdown,
-                icd_obj_frame_slider,
-                icd_obj_show_markers,
-                keyframe_state,
-                icd_obj_canvas_bg_mode,
-                icd_obj_mask_color,
-                icd_obj_mask_opacity,
-            ],
+            inputs=scrub_inputs,
             outputs=[icd_obj_editor, icd_obj_kf_badge],
         )
 
         icd_obj_canvas_bg_mode.change(
             fn=on_scrub_reference_frame,
-            inputs=[
-                obj_step1_dropdown,
-                icd_obj_frame_slider,
-                icd_obj_show_markers,
-                keyframe_state,
-                icd_obj_canvas_bg_mode,
-                icd_obj_mask_color,
-                icd_obj_mask_opacity,
-            ],
+            inputs=scrub_inputs,
+            outputs=[icd_obj_editor, icd_obj_kf_badge],
+        )
+
+        icd_obj_layer_solo.change(
+            fn=on_scrub_reference_frame,
+            inputs=scrub_inputs,
+            outputs=[icd_obj_editor, icd_obj_kf_badge],
+        )
+
+        icd_obj_show_credits.change(
+            fn=on_scrub_reference_frame,
+            inputs=scrub_inputs,
+            outputs=[icd_obj_editor, icd_obj_kf_badge],
+        )
+
+        icd_obj_show_mask.change(
+            fn=on_scrub_reference_frame,
+            inputs=scrub_inputs,
             outputs=[icd_obj_editor, icd_obj_kf_badge],
         )
 
         icd_obj_mask_color.change(
             fn=on_scrub_reference_frame,
-            inputs=[
-                obj_step1_dropdown,
-                icd_obj_frame_slider,
-                icd_obj_show_markers,
-                keyframe_state,
-                icd_obj_canvas_bg_mode,
-                icd_obj_mask_color,
-                icd_obj_mask_opacity,
-            ],
+            inputs=scrub_inputs,
             outputs=[icd_obj_editor, icd_obj_kf_badge],
         )
 
         icd_obj_mask_opacity.release(
             fn=on_scrub_reference_frame,
-            inputs=[
-                obj_step1_dropdown,
-                icd_obj_frame_slider,
-                icd_obj_show_markers,
-                keyframe_state,
-                icd_obj_canvas_bg_mode,
-                icd_obj_mask_color,
-                icd_obj_mask_opacity,
-            ],
+            inputs=scrub_inputs,
             outputs=[icd_obj_editor, icd_obj_kf_badge],
         )
 
@@ -7246,6 +7424,10 @@ def create_stereofaster_ui():
                 icd_obj_canvas_bg_mode,
                 icd_obj_mask_color,
                 icd_obj_mask_opacity,
+                icd_obj_layer_solo,
+                icd_obj_show_credits,
+                icd_obj_show_mask,
+                layer_info_state,
             ],
             outputs=[icd_obj_editor, keyframe_state, icd_obj_status, icd_obj_kf_badge],
         )
@@ -7276,9 +7458,8 @@ def create_stereofaster_ui():
                 icd_obj_editor,
                 keyframe_state,
                 icd_obj_target_depth,
-                icd_obj_city_depth,
-                icd_obj_sky_depth,
-                icd_obj_skyline_split,
+                icd_obj_boost_mode,
+                icd_obj_boost_strength,
                 icd_obj_tophat_snap,
                 icd_obj_save_sidecar,
                 icd_obj_enable_tracking,
