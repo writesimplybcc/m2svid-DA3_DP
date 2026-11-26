@@ -2615,7 +2615,7 @@ def load_reference_frame_for_editor(
         "Layer 2: Midground",
         "Layer 3: Background / Floor",
     ]
-    default_badge = "📌 **Keyframes recorded:** None *(Brush on canvas, then click 'Record Keyframe')*"
+    default_badge = "📌 **Keyframes recorded:** None *(Unlock a layer to paint on canvas and record keyframes)*"
     default_banner = "🔒 **All layers are currently locked.** In the table above, all layers are protected. Select a layer from **'Unlock Layer for Editing'** to enable editing controls."
 
     if not input_video:
@@ -3080,7 +3080,7 @@ def on_scrub_reference_frame(
     layers_state: Optional[List[Dict[str, Any]]] = None,
 ):
     """Update canvas background when user scrubs the frame slider, keeping the exact slider position."""
-    default_badge = "📌 **Keyframes recorded:** None *(Brush on canvas, then click 'Record Keyframe')*"
+    default_badge = "📌 **Keyframes recorded:** None *(Unlock a layer to paint on canvas and record keyframes)*"
     if not input_video:
         return None, default_badge
     vp = resolve_source_video_path(input_video)
@@ -6368,99 +6368,110 @@ def create_stereofaster_ui():
                     # Lock banner showing current state
                     icd_obj_active_banner = gr.Markdown("🔒 **All layers are currently locked.** In the table above, all layers are protected. Select a layer from **'Unlock Layer for Editing'** to enable editing controls.")
 
+                    # ==================== CANVAS & INSPECTION VIEWPORT ====================
+                    # Canvas and inspection controls are always visible so users can scrub frames,
+                    # toggle background views, solo layers, and check depth maps without unlocking.
+                    with gr.Group():
+                        with gr.Row():
+                            with gr.Column(scale=4):
+                                icd_obj_frame_slider = gr.Slider(
+                                    0, 100, value=36, step=1,
+                                    label="Reference Frame Index (Scrub to view / inspect layers across frames)"
+                                )
+                            with gr.Column(scale=2):
+                                with gr.Row():
+                                    icd_obj_reload_btn = gr.Button("🔄 Reload Frame", variant="secondary", size="sm")
+                                    icd_obj_show_markers = gr.Checkbox(label="Show Depth Anchor Markers", value=False)
+
+                        icd_obj_kf_badge = gr.Markdown("📌 **Keyframes recorded:** None *(Unlock a layer to paint on canvas and record keyframes)*")
+
+                        with gr.Row():
+                            icd_obj_canvas_bg_mode = gr.Radio(
+                                choices=[
+                                    "🖼️ RGB Source Video",
+                                    "🗺️ Depth Map (Grayscale)",
+                                    "✨ Depth Map (Aperture Boosted)",
+                                    "🔥 Depth Map (Heatmap)",
+                                ],
+                                value="🖼️ RGB Source Video",
+                                label="Canvas Background View",
+                                info="Switch canvas background between camera video and underlying depth frames.",
+                                scale=3,
+                            )
+                            icd_obj_layer_solo = gr.Dropdown(
+                                choices=[
+                                    "👁️ All Layers (Full Composite)",
+                                    "👁️ Solo: Foreground Only",
+                                    "👁️ Solo: Midground Only",
+                                    "👁️ Solo: Background / Floor Only",
+                                ],
+                                value="👁️ All Layers (Full Composite)",
+                                label="Layer Solo Visibility",
+                                info="Isolate and view only a specific depth plane on canvas.",
+                                scale=2,
+                            )
+                            icd_obj_show_credits = gr.Checkbox(
+                                label="Show Credits Overlay",
+                                value=True,
+                                info="Toggle on-screen text/credit depth layer visibility.",
+                                scale=1,
+                            )
+
+                        with gr.Row():
+                            icd_obj_show_mask = gr.Checkbox(
+                                label="👁️ Show Painted Mask",
+                                value=True,
+                                info="Toggle painted keyframe mask overlay on/off.",
+                                scale=1,
+                            )
+                            icd_obj_mask_color = gr.Dropdown(
+                                choices=[
+                                    "🟢 Neon Green (#00ff66)",
+                                    "🔵 Cyan / Aqua (#00e5ff)",
+                                    "🟡 Bright Yellow (#ffee00)",
+                                    "🔴 Neon Red (#ff2244)",
+                                    "🟣 Magenta / Pink (#ff00aa)",
+                                    "🟠 Vivid Orange (#ff7700)",
+                                    "⚪ Pure White (#ffffff)",
+                                ],
+                                value="🟢 Neon Green (#00ff66)",
+                                label="Mask Overlay Color",
+                                info="Overlay color on canvas (Neon Green/Cyan pops on B&W).",
+                                scale=2,
+                            )
+                            icd_obj_mask_opacity = gr.Slider(
+                                0.10, 1.00, value=0.50, step=0.05,
+                                label="Mask Overlay Opacity",
+                                info="Translucency of painted mask overlay on canvas.",
+                                scale=2,
+                            )
+
+                        icd_obj_editor = gr.ImageEditor(
+                            label="🖌️ Depth Paint Canvas — Inspect layers or brush over target objects for the unlocked layer",
+                            type="numpy",
+                            image_mode="RGBA",
+                            transforms=(),
+                            sources=(),
+                            height=540,
+                            brush=gr.Brush(
+                                default_size=4,
+                                default_color=("rgb(255, 34, 68)", 0.50),
+                                color_mode="defaults"
+                            ),
+                            eraser=gr.Eraser(default_size=4),
+                            elem_id="depth_paint_canvas",
+                        )
+
                     # Editing controls: hidden by default until a layer is unlocked!
                     with gr.Column(visible=False) as icd_obj_editing_controls:
                         # ==================== METHOD 1: PAINT & TRACK ====================
                         with gr.Group():
                             gr.Markdown(
-                                "### 🎨 Method 1: Paint & Track (Interactive Object Sculpting)\n"
-                                "*Brush over target objects on one or more reference keyframes. "
+                                "### 🎨 Method 1: Paint & Track (Interactive Object Sculpting & Boosting)\n"
+                                "*Brush over target objects on one or more reference keyframes or adjust the depth transfer curve. "
                                 "StereoFaster isolates painted strokes, calculates organic 3D volumetric relief, "
-                                "and tracks objects across the clip while respecting locked holdout mattes.*"
+                                "and applies boosting strictly to the unlocked layer while respecting locked holdout mattes.*"
                             )
-                            with gr.Row():
-                                with gr.Column(scale=5):
-                                    icd_obj_frame_slider = gr.Slider(
-                                        0, 100, value=36, step=1,
-                                        label="Reference Keyframe Index (Scrub to view / paint across keyframes)"
-                                    )
-                                with gr.Column(scale=3):
-                                    icd_obj_target_depth = gr.Slider(
-                                        0.00, 1.00, value=0.18, step=0.01,
-                                        label="🎯 Assigned Depth Value (Disparity)",
-                                        info="Depth of painted object (0.0 = deep background, 1.0 = closest foreground)."
-                                    )
-                                with gr.Column(scale=3):
-                                    with gr.Row():
-                                        icd_obj_record_kf_btn = gr.Button("📌 Record Keyframe", variant="primary", size="sm")
-                                        icd_obj_track_preview_btn = gr.Button("🎯 Track & Paint All Frames on Canvas", variant="secondary", size="sm")
-                                        icd_obj_clear_kf_btn = gr.Button("🗑️ Clear Keyframes", variant="secondary", size="sm")
-                                    with gr.Row():
-                                        icd_obj_show_markers = gr.Checkbox(label="Show Depth Anchor Markers", value=False)
-                                        icd_obj_reload_btn = gr.Button("🔄 Reload Frame", variant="secondary", size="sm")
-
-                            icd_obj_kf_badge = gr.Markdown("📌 **Keyframes recorded:** None *(Brush on canvas, then click 'Record Keyframe')*")
-
-                            with gr.Row():
-                                icd_obj_canvas_bg_mode = gr.Radio(
-                                    choices=[
-                                        "🖼️ RGB Source Video",
-                                        "🗺️ Depth Map (Grayscale)",
-                                        "✨ Depth Map (Aperture Boosted)",
-                                        "🔥 Depth Map (Heatmap)",
-                                    ],
-                                    value="🖼️ RGB Source Video",
-                                    label="Canvas Background View",
-                                    info="Switch canvas background between camera video and underlying depth frames.",
-                                    scale=3,
-                                )
-                                icd_obj_layer_solo = gr.Dropdown(
-                                    choices=[
-                                        "👁️ All Layers (Full Composite)",
-                                        "👁️ Solo: Foreground Only",
-                                        "👁️ Solo: Midground Only",
-                                        "👁️ Solo: Background / Floor Only",
-                                    ],
-                                    value="👁️ All Layers (Full Composite)",
-                                    label="Layer Solo Visibility",
-                                    info="Isolate and view only a specific depth plane on canvas.",
-                                    scale=2,
-                                )
-                                icd_obj_show_credits = gr.Checkbox(
-                                    label="Show Credits Overlay",
-                                    value=True,
-                                    info="Toggle on-screen text/credit depth layer visibility.",
-                                    scale=1,
-                                )
-
-                            with gr.Row():
-                                icd_obj_show_mask = gr.Checkbox(
-                                    label="👁️ Show Painted Mask",
-                                    value=True,
-                                    info="Toggle painted keyframe mask overlay on/off.",
-                                    scale=1,
-                                )
-                                icd_obj_mask_color = gr.Dropdown(
-                                    choices=[
-                                        "🟢 Neon Green (#00ff66)",
-                                        "🔵 Cyan / Aqua (#00e5ff)",
-                                        "🟡 Bright Yellow (#ffee00)",
-                                        "🔴 Neon Red (#ff2244)",
-                                        "🟣 Magenta / Pink (#ff00aa)",
-                                        "🟠 Vivid Orange (#ff7700)",
-                                        "⚪ Pure White (#ffffff)",
-                                    ],
-                                    value="🟢 Neon Green (#00ff66)",
-                                    label="Mask Overlay Color",
-                                    info="Overlay color on canvas (Neon Green/Cyan pops on B&W).",
-                                    scale=2,
-                                )
-                                icd_obj_mask_opacity = gr.Slider(
-                                    0.10, 1.00, value=0.50, step=0.05,
-                                    label="Mask Overlay Opacity",
-                                    info="Translucency of painted mask overlay on canvas.",
-                                    scale=2,
-                                )
 
                             icd_obj_brush_bar = gr.HTML(
                                 """
@@ -6517,21 +6528,18 @@ def create_stereofaster_ui():
                                 """
                             )
 
-                            icd_obj_editor = gr.ImageEditor(
-                                label="🖌️ Depth Paint Canvas — Brush over target objects for the unlocked layer",
-                                type="numpy",
-                                image_mode="RGBA",
-                                transforms=(),
-                                sources=(),
-                                height=540,
-                                brush=gr.Brush(
-                                    default_size=4,
-                                    default_color=("rgb(255, 34, 68)", 0.50),
-                                    color_mode="defaults"
-                                ),
-                                eraser=gr.Eraser(default_size=4),
-                                elem_id="depth_paint_canvas",
-                            )
+                            with gr.Row():
+                                with gr.Column(scale=4):
+                                    icd_obj_target_depth = gr.Slider(
+                                        0.00, 1.00, value=0.18, step=0.01,
+                                        label="🎯 Assigned Depth Value (Disparity)",
+                                        info="Depth of painted object (0.0 = deep background, 1.0 = closest foreground)."
+                                    )
+                                with gr.Column(scale=4):
+                                    with gr.Row():
+                                        icd_obj_record_kf_btn = gr.Button("📌 Record Keyframe", variant="primary", size="sm")
+                                        icd_obj_track_preview_btn = gr.Button("🎯 Track & Paint All Frames on Canvas", variant="secondary", size="sm")
+                                        icd_obj_clear_kf_btn = gr.Button("🗑️ Clear Keyframes", variant="secondary", size="sm")
 
                             with gr.Row():
                                 icd_obj_boost_mode = gr.Radio(
