@@ -3660,9 +3660,8 @@ def run_depth_editor_option_a(
     editor_data: Any,
     keyframe_dict: Optional[Dict[int, Any]],
     target_creatures_depth: float,
-    target_city_depth: float,
-    target_sky_depth: float,
-    skyline_split: bool = True,
+    boost_mode: str = "📈 Curve Up (Lift Lower/Distant Values)",
+    boost_strength: float = 0.0,
     tophat_snap: bool = True,
     save_sidecar: bool = True,
     enable_tracking: bool = True,
@@ -3672,6 +3671,7 @@ def run_depth_editor_option_a(
     icd_cfg: float = 1.0,
     icd_res: int = 512,
     progress=gr.Progress(track_tqdm=True),
+    **kwargs,
 ):
     """Option A: In-Context Keyframe Propagation (ICDepth DiT)."""
     if not unlocked_choice or unlocked_choice == "🔒 All Layers Locked":
@@ -3840,9 +3840,8 @@ def run_depth_editor_option_b(
     editor_data: Any,
     keyframe_dict: Optional[Dict[int, Any]],
     target_creatures_depth: float,
-    target_city_depth: float,
-    target_sky_depth: float,
-    skyline_split: bool = True,
+    boost_mode: str = "📈 Curve Up (Lift Lower/Distant Values)",
+    boost_strength: float = 0.0,
     tophat_snap: bool = True,
     save_sidecar: bool = True,
     enable_tracking: bool = True,
@@ -3857,6 +3856,7 @@ def run_depth_editor_option_b(
     icd_cfg: float = 1.0,
     icd_res: int = 512,
     progress=gr.Progress(track_tqdm=True),
+    **kwargs,
 ):
     """Option B: Occluder-Removed Cavity Pass (DepthCrafter / ICDepth Cavity)."""
     if not unlocked_choice or unlocked_choice == "🔒 All Layers Locked":
@@ -6569,11 +6569,6 @@ def create_stereofaster_ui():
                                     value=True,
                                     info="When enabled, propagates painted strokes across unpainted frames using optical flow. When disabled, applies depth strictly to your explicitly painted frames."
                                 )
-                                icd_obj_skyline_split = gr.Checkbox(
-                                    label="🌄 Separate Sky and Skyline in Aperture",
-                                    value=False,
-                                    info="Delineates horizon silhouette separating sky from backdrop (Coldplay Up&Up shot)."
-                                )
                                 icd_obj_save_sidecar = gr.Checkbox(
                                     label="Save to {stem}.layers.json Sidecar",
                                     value=True
@@ -7492,9 +7487,8 @@ def create_stereofaster_ui():
                 icd_obj_editor,
                 keyframe_state,
                 icd_obj_target_depth,
-                icd_obj_city_depth,
-                icd_obj_sky_depth,
-                icd_obj_skyline_split,
+                icd_obj_boost_mode,
+                icd_obj_boost_strength,
                 icd_obj_tophat_snap,
                 icd_obj_save_sidecar,
                 icd_obj_enable_tracking,
@@ -7521,9 +7515,8 @@ def create_stereofaster_ui():
                 icd_obj_editor,
                 keyframe_state,
                 icd_obj_target_depth,
-                icd_obj_city_depth,
-                icd_obj_sky_depth,
-                icd_obj_skyline_split,
+                icd_obj_boost_mode,
+                icd_obj_boost_strength,
                 icd_obj_tophat_snap,
                 icd_obj_save_sidecar,
                 icd_obj_enable_tracking,
