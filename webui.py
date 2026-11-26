@@ -2459,10 +2459,60 @@ def get_cached_video_frames(video_path: str) -> List[np.ndarray]:
     return frames
 
 
+MASK_OVERLAY_COLORS = {
+    "🟢 Neon Green (#00ff66)": (0, 255, 102),
+    "🔵 Cyan / Aqua (#00e5ff)": (0, 229, 255),
+    "🟡 Bright Yellow (#ffee00)": (255, 238, 0),
+    "🔴 Neon Red (#ff2244)": (255, 34, 68),
+    "🟣 Magenta / Pink (#ff00aa)": (255, 0, 170),
+    "🟠 Vivid Orange (#ff7700)": (255, 119, 0),
+    "⚪ Pure White (#ffffff)": (255, 255, 255),
+}
+
+
+def resolve_editor_canvas_background(
+    bgr_frame: np.ndarray,
+    d_frame: Optional[np.ndarray],
+    canvas_mode: str = "🖼️ RGB Source Video",
+    show_markers: bool = False,
+) -> np.ndarray:
+    """Generate canvas background based on user-selected mode (RGB video vs Depth Map)."""
+    if d_frame is not None and "depth" in str(canvas_mode).lower():
+        d_clean = np.clip(d_frame.astype(np.float32), 0.0, 1.0)
+        if "boosted" in str(canvas_mode).lower():
+            # Stretch the darker aperture range (bottom 0.25) so faint features (dugongs, skyline) are bright and clear
+            d_norm = np.clip(d_clean / 0.25, 0.0, 1.0)
+            d_u8 = (d_norm * 255.0).astype(np.uint8)
+            return cv2.cvtColor(d_u8, cv2.COLOR_GRAY2RGB)
+        elif "heatmap" in str(canvas_mode).lower():
+            d_u8 = (d_clean * 255.0).astype(np.uint8)
+            heatmap_bgr = cv2.applyColorMap(d_u8, cv2.COLORMAP_INFERNO)
+            return cv2.cvtColor(heatmap_bgr, cv2.COLOR_BGR2RGB)
+        else:
+            # Clean standard 1:1 grayscale depth video frame
+            d_u8 = (d_clean * 255.0).astype(np.uint8)
+            return cv2.cvtColor(d_u8, cv2.COLOR_GRAY2RGB)
+
+    if show_markers and d_frame is not None:
+        from m2svid.object_layer_depth import (
+            analyze_scene_depth_anchors,
+            render_annotated_reference_frame,
+        )
+        anchors_info = analyze_scene_depth_anchors(bgr_frame, d_frame)
+        annotated_bgr = render_annotated_reference_frame(
+            bgr_frame, d_frame, anchors_info, target_depth=0.18
+        )
+        return cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
+
+    return cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+
+
 def build_editor_value_with_keyframe_mask(
     rgb_canvas: np.ndarray,
     frame_idx: int,
     keyframe_dict: Optional[Dict[int, Any]] = None,
+    mask_color: str = "🟢 Neon Green (#00ff66)",
+    mask_opacity: float = 0.50,
 ) -> Dict[str, Any]:
     """Construct ImageEditor dict loading existing painted strokes for frame_idx if recorded."""
     layers_list = []
@@ -2474,11 +2524,15 @@ def build_editor_value_with_keyframe_mask(
         H_c, W_c = rgb_canvas.shape[:2]
         if m_float.shape[:2] != (H_c, W_c):
             m_float = cv2.resize(m_float, (W_c, H_c), interpolation=cv2.INTER_NEAREST)
+
+        color_rgb = MASK_OVERLAY_COLORS.get(mask_color, (0, 255, 102))
+        alpha_byte = int(round(np.clip(mask_opacity, 0.05, 1.0) * 255.0))
+
         rgba_layer = np.zeros((H_c, W_c, 4), dtype=np.uint8)
-        rgba_layer[..., 0] = 255  # Red
-        rgba_layer[..., 1] = 34   # Green
-        rgba_layer[..., 2] = 68   # Blue
-        rgba_layer[..., 3] = (m_float * 128).astype(np.uint8)  # 50% translucent
+        rgba_layer[..., 0] = color_rgb[0]
+        rgba_layer[..., 1] = color_rgb[1]
+        rgba_layer[..., 2] = color_rgb[2]
+        rgba_layer[..., 3] = (m_float * alpha_byte).astype(np.uint8)
         layers_list.append(rgba_layer)
 
         alpha_norm = (rgba_layer[..., 3:4] / 255.0).astype(np.float32)
@@ -2500,6 +2554,9 @@ def load_reference_frame_for_editor(
     show_markers: bool = False,
     keyframe_dict: Optional[Dict[int, Any]] = None,
     unlocked_choice: str = "🔒 All Layers Locked",
+    canvas_mode: str = "🖼️ RGB Source Video",
+    mask_color: str = "🟢 Neon Green (#00ff66)",
+    mask_opacity: float = 0.50,
 ):
     """Load reference frame, dynamically analyze NPZ into 3 layers (all locked by default), and render canvas."""
     default_rows = [
@@ -2593,14 +2650,9 @@ def load_reference_frame_for_editor(
     else:
         banner_text = default_banner
 
-    if show_markers:
-        anchors_info = analyze_scene_depth_anchors(bgr, d_frame)
-        annotated_bgr = render_annotated_reference_frame(
-            bgr, d_frame, anchors_info, target_depth=0.18
-        )
-        rgb_canvas = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
-    else:
-        rgb_canvas = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    rgb_canvas = resolve_editor_canvas_background(
+        bgr, d_frame, canvas_mode=canvas_mode, show_markers=show_markers
+    )
 
     kf_dict = dict(keyframe_dict or {})
     if vp:
@@ -2616,7 +2668,9 @@ def load_reference_frame_for_editor(
             except Exception as e:
                 SF_LOG.warning(f"Could not load keyframe masks from {masks_npz_path}: {e}")
 
-    editor_value = build_editor_value_with_keyframe_mask(rgb_canvas, idx, kf_dict)
+    editor_value = build_editor_value_with_keyframe_mask(
+        rgb_canvas, idx, kf_dict, mask_color=mask_color, mask_opacity=mask_opacity
+    )
 
     kf_keys = sorted(list(kf_dict.keys()))
     if len(kf_keys) > 10:
@@ -2652,6 +2706,9 @@ def on_toggle_interactive_layering(
     frame_idx: int,
     show_markers: bool = False,
     keyframe_dict: Optional[Dict[int, Any]] = None,
+    canvas_mode: str = "🖼️ RGB Source Video",
+    mask_color: str = "🟢 Neon Green (#00ff66)",
+    mask_opacity: float = 0.50,
 ):
     """Show/hide Depth Editor section and load reference frame when enabled."""
     if not is_enabled:
@@ -2669,7 +2726,8 @@ def on_toggle_interactive_layering(
         )
 
     editor_val, table_data, unlock_update, controls_update, banner_text, t_depth, max_f, badge_text, layers = load_reference_frame_for_editor(
-        input_video, frame_idx, show_markers=show_markers, keyframe_dict=keyframe_dict, unlocked_choice="🔒 All Layers Locked"
+        input_video, frame_idx, show_markers=show_markers, keyframe_dict=keyframe_dict, unlocked_choice="🔒 All Layers Locked",
+        canvas_mode=canvas_mode, mask_color=mask_color, mask_opacity=mask_opacity
     )
     return (
         gr.update(visible=True),
@@ -2922,6 +2980,9 @@ def on_scrub_reference_frame(
     frame_idx: int,
     show_markers: bool = False,
     keyframe_dict: Optional[Dict[int, Any]] = None,
+    canvas_mode: str = "🖼️ RGB Source Video",
+    mask_color: str = "🟢 Neon Green (#00ff66)",
+    mask_opacity: float = 0.50,
 ):
     """Update canvas background when user scrubs the frame slider, keeping the exact slider position."""
     default_badge = "📌 **Keyframes recorded:** None *(Brush on canvas, then click 'Record Keyframe')*"
@@ -2942,12 +3003,13 @@ def on_scrub_reference_frame(
     if bgr is None:
         return None, f"⚠️ Could not read frame {idx}."
 
-    if show_markers:
+    d_frame = None
+    if show_markers or "depth" in str(canvas_mode).lower():
         stem = vp.stem
         out_npz = DEPTH_DIR / f"{stem}_ICD_depth.npz"
         raw_npz = DEPTH_DIR / f"{stem}_ICD_depth.raw.npz"
         raw_credits_npz = DEPTH_DIR / f"{stem}_raw_credits_depth.npz"
-        src_npz = raw_credits_npz if raw_credits_npz.exists() else (raw_npz if raw_npz.exists() else out_npz)
+        src_npz = raw_npz if raw_npz.exists() else (raw_credits_npz if raw_credits_npz.exists() else out_npz)
         if src_npz.exists():
             with np.load(str(src_npz)) as data:
                 key = "depth" if "depth" in data else list(data.keys())[0]
@@ -2955,17 +3017,9 @@ def on_scrub_reference_frame(
                 idx_clamped = min(depth_all.shape[0] - 1, idx)
                 d_frame = depth_all[idx_clamped].astype(np.float32)
 
-            from m2svid.object_layer_depth import (
-                analyze_scene_depth_anchors,
-                render_annotated_reference_frame,
-            )
-            anchors_info = analyze_scene_depth_anchors(bgr, d_frame)
-            annotated_bgr = render_annotated_reference_frame(bgr, d_frame, anchors_info, target_depth=0.18)
-            rgb_canvas = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
-        else:
-            rgb_canvas = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    else:
-        rgb_canvas = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    rgb_canvas = resolve_editor_canvas_background(
+        bgr, d_frame, canvas_mode=canvas_mode, show_markers=show_markers
+    )
 
     kf_dict = dict(keyframe_dict or {})
     if vp:
@@ -2981,7 +3035,9 @@ def on_scrub_reference_frame(
             except Exception as e:
                 SF_LOG.warning(f"Could not load keyframe masks from {masks_npz_path}: {e}")
 
-    editor_value = build_editor_value_with_keyframe_mask(rgb_canvas, idx, kf_dict)
+    editor_value = build_editor_value_with_keyframe_mask(
+        rgb_canvas, idx, kf_dict, mask_color=mask_color, mask_opacity=mask_opacity
+    )
 
     kf_keys = sorted(list(kf_dict.keys()))
     has_mask = (kf_dict.get(idx) is not None and np.any(kf_dict[idx] > 0.05))
@@ -3145,6 +3201,9 @@ def track_and_paint_all_frames_action(
     frame_idx: int,
     editor_data: Any,
     keyframe_dict: Optional[Dict[int, Any]] = None,
+    canvas_mode: str = "🖼️ RGB Source Video",
+    mask_color: str = "🟢 Neon Green (#00ff66)",
+    mask_opacity: float = 0.50,
     progress=gr.Progress(track_tqdm=True),
 ):
     """Run optical flow tracking on painted keyframes and paint masks on Depth Paint Canvas for all frames."""
@@ -3211,8 +3270,22 @@ def track_and_paint_all_frames_action(
         SF_LOG.warning(f"Could not save tracked masks to {masks_npz_path}: {e}")
 
     idx = max(0, min(len(frames) - 1, int(frame_idx)))
-    rgb_canvas = cv2.cvtColor(frames[idx], cv2.COLOR_BGR2RGB)
-    editor_val = build_editor_value_with_keyframe_mask(rgb_canvas, idx, updated_dict)
+    d_frame = None
+    if "depth" in str(canvas_mode).lower():
+        stem = vp.stem
+        out_npz = DEPTH_DIR / f"{stem}_ICD_depth.npz"
+        raw_npz = DEPTH_DIR / f"{stem}_ICD_depth.raw.npz"
+        raw_credits_npz = DEPTH_DIR / f"{stem}_raw_credits_depth.npz"
+        src_npz = raw_npz if raw_npz.exists() else (raw_credits_npz if raw_credits_npz.exists() else out_npz)
+        if src_npz.exists():
+            with np.load(str(src_npz)) as data:
+                key = "depth" if "depth" in data else list(data.keys())[0]
+                depth_all = data[key]
+                idx_clamped = min(depth_all.shape[0] - 1, idx)
+                d_frame = depth_all[idx_clamped].astype(np.float32)
+
+    rgb_canvas = resolve_editor_canvas_background(frames[idx], d_frame, canvas_mode=canvas_mode)
+    editor_val = build_editor_value_with_keyframe_mask(rgb_canvas, idx, updated_dict, mask_color=mask_color, mask_opacity=mask_opacity)
 
     badge = f"🎯 **Tracking complete!** All {len(frames)} frames tracked and painted on canvas. Scrub the slider to inspect any frame!"
     status = f"✅ Tracked painted object across all {len(frames)} frames. Canvas updated with tracked strokes!"
@@ -6170,6 +6243,41 @@ def create_stereofaster_ui():
 
                             icd_obj_kf_badge = gr.Markdown("📌 **Keyframes recorded:** None *(Brush on canvas, then click 'Record Keyframe')*")
 
+                            with gr.Row():
+                                icd_obj_canvas_bg_mode = gr.Radio(
+                                    choices=[
+                                        "🖼️ RGB Source Video",
+                                        "🗺️ Depth Map (Grayscale)",
+                                        "✨ Depth Map (Aperture Boosted)",
+                                        "🔥 Depth Map (Heatmap)",
+                                    ],
+                                    value="🖼️ RGB Source Video",
+                                    label="Canvas Background View",
+                                    info="Switch canvas background between camera video and underlying depth frames.",
+                                    scale=3,
+                                )
+                                icd_obj_mask_color = gr.Dropdown(
+                                    choices=[
+                                        "🟢 Neon Green (#00ff66)",
+                                        "🔵 Cyan / Aqua (#00e5ff)",
+                                        "🟡 Bright Yellow (#ffee00)",
+                                        "🔴 Neon Red (#ff2244)",
+                                        "🟣 Magenta / Pink (#ff00aa)",
+                                        "🟠 Vivid Orange (#ff7700)",
+                                        "⚪ Pure White (#ffffff)",
+                                    ],
+                                    value="🟢 Neon Green (#00ff66)",
+                                    label="Mask Overlay Color",
+                                    info="Overlay color on canvas (Neon Green/Cyan pops on B&W).",
+                                    scale=2,
+                                )
+                                icd_obj_mask_opacity = gr.Slider(
+                                    0.10, 1.00, value=0.50, step=0.05,
+                                    label="Mask Overlay Opacity",
+                                    info="Translucency of painted mask overlay on canvas.",
+                                    scale=2,
+                                )
+
                             icd_obj_brush_bar = gr.HTML(
                                 """
                                 <div style="display: flex; flex-direction: column; gap: 8px; margin: 6px 0 10px 0; padding: 10px 14px; background: rgba(30, 41, 59, 0.75); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 8px;">
@@ -6988,6 +7096,9 @@ def create_stereofaster_ui():
                 icd_obj_frame_slider,
                 icd_obj_show_markers,
                 keyframe_state,
+                icd_obj_canvas_bg_mode,
+                icd_obj_mask_color,
+                icd_obj_mask_opacity,
             ],
             outputs=[
                 icd_obj_main_section,
@@ -7029,19 +7140,85 @@ def create_stereofaster_ui():
 
         icd_obj_frame_slider.release(
             fn=on_scrub_reference_frame,
-            inputs=[obj_step1_dropdown, icd_obj_frame_slider, icd_obj_show_markers, keyframe_state],
+            inputs=[
+                obj_step1_dropdown,
+                icd_obj_frame_slider,
+                icd_obj_show_markers,
+                keyframe_state,
+                icd_obj_canvas_bg_mode,
+                icd_obj_mask_color,
+                icd_obj_mask_opacity,
+            ],
             outputs=[icd_obj_editor, icd_obj_kf_badge],
         )
 
         icd_obj_reload_btn.click(
             fn=on_scrub_reference_frame,
-            inputs=[obj_step1_dropdown, icd_obj_frame_slider, icd_obj_show_markers, keyframe_state],
+            inputs=[
+                obj_step1_dropdown,
+                icd_obj_frame_slider,
+                icd_obj_show_markers,
+                keyframe_state,
+                icd_obj_canvas_bg_mode,
+                icd_obj_mask_color,
+                icd_obj_mask_opacity,
+            ],
             outputs=[icd_obj_editor, icd_obj_kf_badge],
         )
 
         icd_obj_show_markers.change(
             fn=on_scrub_reference_frame,
-            inputs=[obj_step1_dropdown, icd_obj_frame_slider, icd_obj_show_markers, keyframe_state],
+            inputs=[
+                obj_step1_dropdown,
+                icd_obj_frame_slider,
+                icd_obj_show_markers,
+                keyframe_state,
+                icd_obj_canvas_bg_mode,
+                icd_obj_mask_color,
+                icd_obj_mask_opacity,
+            ],
+            outputs=[icd_obj_editor, icd_obj_kf_badge],
+        )
+
+        icd_obj_canvas_bg_mode.change(
+            fn=on_scrub_reference_frame,
+            inputs=[
+                obj_step1_dropdown,
+                icd_obj_frame_slider,
+                icd_obj_show_markers,
+                keyframe_state,
+                icd_obj_canvas_bg_mode,
+                icd_obj_mask_color,
+                icd_obj_mask_opacity,
+            ],
+            outputs=[icd_obj_editor, icd_obj_kf_badge],
+        )
+
+        icd_obj_mask_color.change(
+            fn=on_scrub_reference_frame,
+            inputs=[
+                obj_step1_dropdown,
+                icd_obj_frame_slider,
+                icd_obj_show_markers,
+                keyframe_state,
+                icd_obj_canvas_bg_mode,
+                icd_obj_mask_color,
+                icd_obj_mask_opacity,
+            ],
+            outputs=[icd_obj_editor, icd_obj_kf_badge],
+        )
+
+        icd_obj_mask_opacity.release(
+            fn=on_scrub_reference_frame,
+            inputs=[
+                obj_step1_dropdown,
+                icd_obj_frame_slider,
+                icd_obj_show_markers,
+                keyframe_state,
+                icd_obj_canvas_bg_mode,
+                icd_obj_mask_color,
+                icd_obj_mask_opacity,
+            ],
             outputs=[icd_obj_editor, icd_obj_kf_badge],
         )
 
@@ -7061,7 +7238,15 @@ def create_stereofaster_ui():
 
         icd_obj_track_preview_btn.click(
             fn=track_and_paint_all_frames_action,
-            inputs=[obj_step1_dropdown, icd_obj_frame_slider, icd_obj_editor, keyframe_state],
+            inputs=[
+                obj_step1_dropdown,
+                icd_obj_frame_slider,
+                icd_obj_editor,
+                keyframe_state,
+                icd_obj_canvas_bg_mode,
+                icd_obj_mask_color,
+                icd_obj_mask_opacity,
+            ],
             outputs=[icd_obj_editor, keyframe_state, icd_obj_status, icd_obj_kf_badge],
         )
 
